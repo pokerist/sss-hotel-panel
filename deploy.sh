@@ -222,7 +222,7 @@ generate_env_file() {
     JWT_REFRESH_SECRET=$(generate_jwt_secret)
     
     # Create .env file
-    cat > .env << EOF
+    cat > backend/.env << EOF
 # IPTV Hotel Panel Environment Configuration
 # Generated on $(date)
 
@@ -427,7 +427,7 @@ setup_ssl() {
         sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos --non-interactive
         
         # Update environment file with HTTPS URLs
-        sed -i "s|http://$SERVER_IP|https://$DOMAIN_NAME|g" $APP_DIR/.env
+        sed -i "s|http://$SERVER_IP|https://$DOMAIN_NAME|g" $APP_DIR/backend/.env
         
         log "SSL certificate configured successfully!"
     fi
