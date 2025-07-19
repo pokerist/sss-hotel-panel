@@ -1,0 +1,605 @@
+#!/bin/bash
+
+# IPTV Hotel Control Panel Deployment Script
+# Ubuntu Server Deployment with Auto-Configuration
+
+set -e  # Exit on any error
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Logging function
+log() {
+    echo -e "${GREEN}[$(date +'%Y-%m-%d %H:%M:%S')] $1${NC}"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARNING] $1${NC}"
+}
+
+error() {
+    echo -e "${RED}[ERROR] $1${NC}"
+    exit 1
+}
+
+info() {
+    echo -e "${BLUE}[INFO] $1${NC}"
+}
+
+# Check if running as root
+if [[ $EUID -eq 0 ]]; then
+    error "This script should not be run as root. Please run as a regular user with sudo privileges."
+fi
+
+# Check if sudo is available
+if ! sudo -n true 2>/dev/null; then
+    error "This script requires sudo privileges. Please ensure your user has sudo access."
+fi
+
+echo -e "${BLUE}"
+echo "=================================="
+echo "   IPTV Hotel Control Panel"
+echo "     Deployment Script v1.0"
+echo "=================================="
+echo -e "${NC}"
+
+# Detect server IP address
+detect_server_ip() {
+    local ip=$(ip route get 8.8.8.8 | awk -F"src " 'NR==1{split($2,a," ");print a[1]}')
+    if [[ -z "$ip" ]]; then
+        ip=$(hostname -I | awk '{print $1}')
+    fi
+    if [[ -z "$ip" ]]; then
+        ip="localhost"
+    fi
+    echo "$ip"
+}
+
+# Generate random password
+generate_password() {
+    openssl rand -base64 32 | head -c 24
+}
+
+# Generate JWT secrets
+generate_jwt_secret() {
+    openssl rand -hex 32
+}
+
+# Collect deployment information
+collect_deployment_info() {
+    log "Collecting deployment configuration..."
+    
+    # Auto-detect server IP
+    SERVER_IP=$(detect_server_ip)
+    echo
+    info "Auto-detected server IP: $SERVER_IP"
+    read -p "Confirm server IP address [$SERVER_IP]: " user_ip
+    SERVER_IP=${user_ip:-$SERVER_IP}
+    
+    # Panel name
+    echo
+    read -p "Enter panel name [Hotel IPTV Panel]: " PANEL_NAME
+    PANEL_NAME=${PANEL_NAME:-"Hotel IPTV Panel"}
+    
+    # Super admin credentials
+    echo
+    log "Setting up Super Admin account..."
+    read -p "Super Admin email: " SUPER_ADMIN_EMAIL
+    while [[ -z "$SUPER_ADMIN_EMAIL" ]]; do
+        warn "Email is required!"
+        read -p "Super Admin email: " SUPER_ADMIN_EMAIL
+    done
+    
+    read -s -p "Super Admin password (leave empty to generate): " SUPER_ADMIN_PASSWORD
+    echo
+    if [[ -z "$SUPER_ADMIN_PASSWORD" ]]; then
+        SUPER_ADMIN_PASSWORD=$(generate_password)
+        info "Generated super admin password: $SUPER_ADMIN_PASSWORD"
+        echo "Please save this password securely!"
+        read -p "Press Enter to continue..."
+    fi
+    
+    # Opera PMS Configuration
+    echo
+    log "PMS Integration Setup..."
+    read -p "Opera PMS base URL (leave empty to skip): " PMS_BASE_URL
+    
+    # Database choice
+    echo
+    log "Database Configuration..."
+    echo "Choose database type:"
+    echo "1) MongoDB (recommended)"
+    echo "2) PostgreSQL"
+    read -p "Select database [1]: " db_choice
+    db_choice=${db_choice:-1}
+    
+    if [[ "$db_choice" == "2" ]]; then
+        DB_TYPE="postgresql"
+        read -p "PostgreSQL database name [iptv_hotel]: " PG_DATABASE
+        PG_DATABASE=${PG_DATABASE:-"iptv_hotel"}
+        read -p "PostgreSQL username [iptv_user]: " PG_USERNAME
+        PG_USERNAME=${PG_USERNAME:-"iptv_user"}
+        PG_PASSWORD=$(generate_password)
+        info "Generated PostgreSQL password: $PG_PASSWORD"
+    else
+        DB_TYPE="mongodb"
+    fi
+    
+    # SSL Configuration
+    echo
+    read -p "Setup SSL with Let's Encrypt? (y/N): " setup_ssl
+    setup_ssl=${setup_ssl:-n}
+    
+    if [[ "$setup_ssl" =~ ^[Yy] ]]; then
+        read -p "Enter domain name for SSL certificate: " DOMAIN_NAME
+        read -p "Enter email for Let's Encrypt notifications: " SSL_EMAIL
+    fi
+}
+
+# Install system dependencies
+install_dependencies() {
+    log "Installing system dependencies..."
+    
+    # Update package list
+    sudo apt update
+    
+    # Install essential packages
+    sudo apt install -y curl wget git unzip software-properties-common apt-transport-https ca-certificates gnupg lsb-release
+    
+    # Install Node.js
+    log "Installing Node.js..."
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    sudo apt install -y nodejs
+    
+    # Install PM2
+    log "Installing PM2..."
+    sudo npm install -g pm2
+    
+    # Install Nginx
+    log "Installing Nginx..."
+    sudo apt install -y nginx
+    
+    # Install database
+    if [[ "$DB_TYPE" == "mongodb" ]]; then
+        log "Installing MongoDB..."
+        curl -fsSL https://pgp.mongodb.com/server-7.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
+        echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
+        sudo apt update
+        sudo apt install -y mongodb-org
+        sudo systemctl enable mongod
+        sudo systemctl start mongod
+    else
+        log "Installing PostgreSQL..."
+        sudo apt install -y postgresql postgresql-contrib
+        sudo systemctl enable postgresql
+        sudo systemctl start postgresql
+        
+        # Create database and user
+        sudo -u postgres psql -c "CREATE DATABASE $PG_DATABASE;"
+        sudo -u postgres psql -c "CREATE USER $PG_USERNAME WITH ENCRYPTED PASSWORD '$PG_PASSWORD';"
+        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $PG_DATABASE TO $PG_USERNAME;"
+        sudo -u postgres psql -c "ALTER USER $PG_USERNAME CREATEDB;"
+    fi
+    
+    log "Dependencies installed successfully!"
+}
+
+# Configure firewall
+configure_firewall() {
+    log "Configuring firewall..."
+    
+    # Enable UFW if not already enabled
+    if ! sudo ufw status | grep -q "Status: active"; then
+        sudo ufw --force enable
+    fi
+    
+    # Allow SSH
+    sudo ufw allow ssh
+    
+    # Allow HTTP and HTTPS
+    sudo ufw allow 80
+    sudo ufw allow 443
+    
+    # Allow WebSocket port
+    sudo ufw allow 4000
+    
+    # Allow application port
+    sudo ufw allow 3000
+    
+    log "Firewall configured successfully!"
+}
+
+# Generate environment file
+generate_env_file() {
+    log "Generating environment configuration..."
+    
+    # Generate JWT secrets
+    JWT_SECRET=$(generate_jwt_secret)
+    JWT_REFRESH_SECRET=$(generate_jwt_secret)
+    
+    # Create .env file
+    cat > .env << EOF
+# IPTV Hotel Panel Environment Configuration
+# Generated on $(date)
+
+# Panel Configuration
+PANEL_NAME="$PANEL_NAME"
+PANEL_BASE_URL="http://$SERVER_IP"
+PORT=3000
+FRONTEND_URL="http://$SERVER_IP"
+
+# Database Configuration
+DB_TYPE="$DB_TYPE"
+EOF
+
+    if [[ "$DB_TYPE" == "mongodb" ]]; then
+        cat >> .env << EOF
+MONGO_URI="mongodb://localhost:27017/iptv_hotel"
+EOF
+    else
+        cat >> .env << EOF
+PG_HOST="localhost"
+PG_PORT=5432
+PG_DATABASE="$PG_DATABASE"
+PG_USERNAME="$PG_USERNAME"
+PG_PASSWORD="$PG_PASSWORD"
+EOF
+    fi
+    
+    cat >> .env << EOF
+
+# Authentication
+JWT_SECRET="$JWT_SECRET"
+JWT_REFRESH_SECRET="$JWT_REFRESH_SECRET"
+JWT_EXPIRES_IN="15m"
+JWT_REFRESH_EXPIRES_IN="7d"
+
+# WebSocket Configuration  
+WS_PORT=4000
+
+# PMS Integration
+PMS_BASE_URL="$PMS_BASE_URL"
+PMS_POLLING_INTERVAL=15
+USE_MOCK_PMS=false
+
+# Mock PMS Server (Development)
+MOCK_PMS_PORT=3001
+
+# File Upload Configuration
+MAX_FILE_SIZE=50MB
+ALLOWED_IMAGE_TYPES="jpg,jpeg,png,gif,webp"
+ALLOWED_VIDEO_TYPES="mp4,avi,mkv,webm"
+
+# Security
+CORS_ORIGIN="http://$SERVER_IP"
+RATE_LIMIT_WINDOW=15
+RATE_LIMIT_MAX_REQUESTS=100
+
+# Logging
+LOG_LEVEL="info"
+LOG_RETENTION_DAYS=30
+
+# Super Admin (Created during deployment)
+SUPER_ADMIN_EMAIL="$SUPER_ADMIN_EMAIL"
+SUPER_ADMIN_PASSWORD="$SUPER_ADMIN_PASSWORD"
+
+# SSL Configuration (Production)
+SSL_CERT_PATH=""
+SSL_KEY_PATH=""
+
+NODE_ENV="production"
+EOF
+
+    log "Environment file generated successfully!"
+}
+
+# Install application
+install_application() {
+    log "Installing application dependencies..."
+    
+    # Create application directory
+    APP_DIR="/opt/iptv-hotel-panel"
+    sudo mkdir -p $APP_DIR
+    
+    # Copy application files
+    sudo cp -r . $APP_DIR/
+    sudo chown -R $USER:$USER $APP_DIR
+    
+    # Install backend dependencies
+    cd $APP_DIR/backend
+    npm install --production
+    
+    # Install frontend dependencies and build
+    cd $APP_DIR/frontend
+    npm install
+    npm run build
+    
+    # Create necessary directories
+    sudo mkdir -p $APP_DIR/backend/public/uploads/backgrounds
+    sudo mkdir -p $APP_DIR/backend/public/uploads/app-icons
+    sudo mkdir -p $APP_DIR/backend/logs
+    
+    # Set proper permissions
+    sudo chown -R $USER:www-data $APP_DIR/backend/public
+    sudo chmod -R 755 $APP_DIR/backend/public
+    sudo chown -R $USER:$USER $APP_DIR/backend/logs
+    
+    log "Application installed successfully!"
+}
+
+# Configure Nginx
+configure_nginx() {
+    log "Configuring Nginx..."
+    
+    # Create Nginx configuration
+    sudo tee /etc/nginx/sites-available/iptv-hotel-panel << EOF
+server {
+    listen 80;
+    server_name $SERVER_IP;
+    
+    # Frontend (React build)
+    location / {
+        root $APP_DIR/frontend/build;
+        index index.html index.htm;
+        try_files \$uri \$uri/ /index.html;
+    }
+    
+    # Backend API
+    location /api/ {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_cache_bypass \$http_upgrade;
+    }
+    
+    # WebSocket for Socket.IO
+    location /socket.io/ {
+        proxy_pass http://localhost:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    
+    # Health check
+    location /health {
+        proxy_pass http://localhost:3000;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+    
+    # Static uploads
+    location /uploads/ {
+        root $APP_DIR/backend/public;
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+    }
+    
+    # Security headers
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer-when-downgrade" always;
+    add_header Content-Security-Policy "default-src 'self' http: https: data: blob: 'unsafe-inline'" always;
+}
+EOF
+
+    # Enable the site
+    sudo ln -sf /etc/nginx/sites-available/iptv-hotel-panel /etc/nginx/sites-enabled/
+    
+    # Remove default site
+    sudo rm -f /etc/nginx/sites-enabled/default
+    
+    # Test and reload Nginx
+    sudo nginx -t
+    sudo systemctl reload nginx
+    
+    log "Nginx configured successfully!"
+}
+
+# Setup SSL with Let's Encrypt
+setup_ssl() {
+    if [[ "$setup_ssl" =~ ^[Yy] ]] && [[ -n "$DOMAIN_NAME" ]]; then
+        log "Setting up SSL certificate..."
+        
+        # Install Certbot
+        sudo apt install -y certbot python3-certbot-nginx
+        
+        # Update Nginx config with domain name
+        sudo sed -i "s/server_name $SERVER_IP;/server_name $DOMAIN_NAME;/" /etc/nginx/sites-available/iptv-hotel-panel
+        sudo systemctl reload nginx
+        
+        # Obtain SSL certificate
+        sudo certbot --nginx -d $DOMAIN_NAME --email $SSL_EMAIL --agree-tos --non-interactive
+        
+        # Update environment file with HTTPS URLs
+        sed -i "s|http://$SERVER_IP|https://$DOMAIN_NAME|g" $APP_DIR/.env
+        
+        log "SSL certificate configured successfully!"
+    fi
+}
+
+# Setup PM2
+setup_pm2() {
+    log "Setting up PM2 process manager..."
+    
+    cd $APP_DIR
+    
+    # Create PM2 ecosystem file
+    cat > ecosystem.config.js << EOF
+module.exports = {
+  apps: [
+    {
+      name: 'iptv-hotel-panel',
+      script: './backend/src/app.js',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production'
+      },
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      error_file: './backend/logs/pm2-error.log',
+      out_file: './backend/logs/pm2-out.log',
+      log_file: './backend/logs/pm2-combined.log',
+      time: true,
+      autorestart: true,
+      max_memory_restart: '1G',
+      watch: false,
+      ignore_watch: ['node_modules', 'logs', 'public/uploads']
+    }
+  ]
+};
+EOF
+    
+    # Start the application
+    pm2 start ecosystem.config.js
+    
+    # Save PM2 configuration
+    pm2 save
+    
+    # Setup PM2 startup script
+    sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME
+    
+    log "PM2 configured successfully!"
+}
+
+# Initialize database
+initialize_database() {
+    log "Initializing database and creating super admin..."
+    
+    cd $APP_DIR/backend
+    
+    # Wait for application to start
+    sleep 10
+    
+    # Create initialization script
+    cat > initialize.js << 'EOF'
+const mongoose = require('mongoose');
+const { Sequelize } = require('sequelize');
+require('dotenv').config();
+
+const User = require('./src/models/User');
+const Settings = require('./src/models/Settings');
+const database = require('./src/config/database');
+
+async function initialize() {
+    try {
+        console.log('Connecting to database...');
+        await database.connect();
+        
+        console.log('Initializing default settings...');
+        await Settings.initializeDefaultSettings();
+        
+        console.log('Creating super admin user...');
+        const superAdmin = await User.createUser({
+            email: process.env.SUPER_ADMIN_EMAIL,
+            password: process.env.SUPER_ADMIN_PASSWORD,
+            name: 'Super Administrator',
+            role: 'super_admin'
+        });
+        
+        console.log('Super admin created successfully:', superAdmin.email);
+        console.log('Initialization completed!');
+        
+        await database.disconnect();
+        process.exit(0);
+    } catch (error) {
+        console.error('Initialization failed:', error);
+        process.exit(1);
+    }
+}
+
+initialize();
+EOF
+    
+    # Run initialization
+    node initialize.js
+    
+    # Clean up
+    rm initialize.js
+    
+    log "Database initialized successfully!"
+}
+
+# Main deployment function
+deploy() {
+    log "Starting IPTV Hotel Control Panel deployment..."
+    
+    # Check system requirements
+    if ! command -v curl &> /dev/null; then
+        sudo apt update && sudo apt install -y curl
+    fi
+    
+    # Collect configuration
+    collect_deployment_info
+    
+    # Install dependencies
+    install_dependencies
+    
+    # Configure firewall
+    configure_firewall
+    
+    # Generate environment file
+    generate_env_file
+    
+    # Install application
+    install_application
+    
+    # Configure Nginx
+    configure_nginx
+    
+    # Setup SSL if requested
+    setup_ssl
+    
+    # Setup PM2
+    setup_pm2
+    
+    # Initialize database
+    initialize_database
+    
+    # Deployment summary
+    echo
+    echo -e "${GREEN}=================================="
+    echo "   Deployment Completed!"
+    echo -e "==================================${NC}"
+    echo
+    info "Panel URL: http://$SERVER_IP"
+    if [[ "$setup_ssl" =~ ^[Yy] ]] && [[ -n "$DOMAIN_NAME" ]]; then
+        info "Secure URL: https://$DOMAIN_NAME"
+    fi
+    echo
+    info "Super Admin Credentials:"
+    info "  Email: $SUPER_ADMIN_EMAIL"
+    info "  Password: $SUPER_ADMIN_PASSWORD"
+    echo
+    info "Application Directory: $APP_DIR"
+    info "Log Files: $APP_DIR/backend/logs/"
+    echo
+    info "Useful Commands:"
+    info "  View logs: pm2 logs iptv-hotel-panel"
+    info "  Restart app: pm2 restart iptv-hotel-panel"
+    info "  Stop app: pm2 stop iptv-hotel-panel"
+    info "  Check status: pm2 status"
+    echo
+    warn "Please save the super admin password securely!"
+    warn "Consider changing default passwords after first login."
+    echo
+    log "IPTV Hotel Control Panel is now running!"
+}
+
+# Run deployment
+deploy

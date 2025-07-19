@@ -1,0 +1,56 @@
+{
+  "name": "iptv-hotel-panel-frontend",
+  "version": "1.0.0",
+  "description": "IPTV Hotel Control Panel - Admin Frontend",
+  "private": true,
+  "dependencies": {
+    "@testing-library/jest-dom": "^5.16.5",
+    "@testing-library/react": "^13.4.0",
+    "@testing-library/user-event": "^13.5.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
+    "web-vitals": "^2.1.4",
+    "react-router-dom": "^6.8.1",
+    "axios": "^1.3.4",
+    "socket.io-client": "^4.6.1",
+    "@mui/material": "^5.11.10",
+    "@mui/icons-material": "^5.11.9",
+    "@emotion/react": "^11.10.5",
+    "@emotion/styled": "^11.10.5",
+    "@mui/x-data-grid": "^5.17.24",
+    "@mui/x-date-pickers": "^5.0.20",
+    "dayjs": "^1.11.7",
+    "react-hook-form": "^7.43.5",
+    "@hookform/resolvers": "^2.9.11",
+    "yup": "^1.0.2",
+    "notistack": "^2.0.8",
+    "recharts": "^2.5.0",
+    "react-dropzone": "^14.2.3"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build",
+    "test": "react-scripts test",
+    "eject": "react-scripts eject"
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "react-app/jest"
+    ]
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "proxy": "http://localhost:3000"
+}
