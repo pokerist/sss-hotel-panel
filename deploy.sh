@@ -214,6 +214,7 @@ configure_firewall() {
 }
 
 # Generate environment file
+# Generate environment file
 generate_env_file() {
     log "Generating environment configuration..."
     
@@ -221,7 +222,7 @@ generate_env_file() {
     JWT_SECRET=$(generate_jwt_secret)
     JWT_REFRESH_SECRET=$(generate_jwt_secret)
     
-    # Create .env file
+    # Create backend/.env file
     cat > backend/.env << EOF
 # IPTV Hotel Panel Environment Configuration
 # Generated on $(date)
@@ -237,11 +238,11 @@ DB_TYPE="$DB_TYPE"
 EOF
 
     if [[ "$DB_TYPE" == "mongodb" ]]; then
-        cat >> .env << EOF
+        cat >> backend/.env << EOF
 MONGO_URI="mongodb://localhost:27017/iptv_hotel"
 EOF
     else
-        cat >> .env << EOF
+        cat >> backend/.env << EOF
 PG_HOST="localhost"
 PG_PORT=5432
 PG_DATABASE="$PG_DATABASE"
@@ -250,7 +251,7 @@ PG_PASSWORD="$PG_PASSWORD"
 EOF
     fi
     
-    cat >> .env << EOF
+    cat >> backend/.env << EOF
 
 # Authentication
 JWT_SECRET="$JWT_SECRET"
@@ -296,6 +297,7 @@ EOF
 
     log "Environment file generated successfully!"
 }
+
 
 # Install application
 install_application() {
