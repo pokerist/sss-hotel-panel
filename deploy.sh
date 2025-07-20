@@ -345,10 +345,11 @@ WS_PORT=4000
 # PMS Integration
 PMS_BASE_URL="$PMS_BASE_URL"
 PMS_POLLING_INTERVAL=15
-USE_MOCK_PMS=false
+USE_MOCK_PMS=$([ -z "$PMS_BASE_URL" ] && echo "true" || echo "false")
 
 # Mock PMS Server (Development)
 MOCK_PMS_PORT=3001
+$([ -z "$PMS_BASE_URL" ] && echo "MOCK_PMS_BASE_URL=\"http://$SERVER_IP:3001\"" || echo "")
 
 # File Upload Configuration
 MAX_FILE_SIZE=50MB
@@ -528,8 +529,60 @@ setup_pm2() {
     
     cd $APP_DIR
     
-    # Create PM2 ecosystem file
-    cat > ecosystem.config.js << EOF
+    # Create PM2 ecosystem file with conditional mock PMS
+    if [[ -z "$PMS_BASE_URL" ]]; then
+        log "No PMS configured, adding mock PMS to ecosystem..."
+        # Create logs directory for mock PMS
+        sudo mkdir -p $APP_DIR/mock-pms/logs
+        sudo chown -R $USER:$USER $APP_DIR/mock-pms/logs
+        
+        cat > ecosystem.config.js << EOF
+module.exports = {
+  apps: [
+    {
+      name: 'iptv-hotel-panel',
+      script: './backend/src/app.js',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production'
+      },
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      error_file: './backend/logs/pm2-error.log',
+      out_file: './backend/logs/pm2-out.log',
+      log_file: './backend/logs/pm2-combined.log',
+      time: true,
+      autorestart: true,
+      max_memory_restart: '1G',
+      watch: false,
+      ignore_watch: ['node_modules', 'logs', 'public/uploads']
+    },
+    {
+      name: 'iptv-mock-pms',
+      script: './mock-pms/server.js',
+      instances: 1,
+      exec_mode: 'fork',
+      env: {
+        NODE_ENV: 'production',
+        MOCK_PMS_PORT: 3001
+      },
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
+      error_file: './mock-pms/logs/pm2-error.log',
+      out_file: './mock-pms/logs/pm2-out.log',
+      log_file: './mock-pms/logs/pm2-combined.log',
+      time: true,
+      autorestart: true,
+      max_memory_restart: '512M',
+      watch: false,
+      ignore_watch: ['node_modules', 'logs'],
+      restart_delay: 4000
+    }
+  ]
+};
+EOF
+    else
+        log "PMS URL configured, using external PMS..."
+        cat > ecosystem.config.js << EOF
 module.exports = {
   apps: [
     {
@@ -553,6 +606,15 @@ module.exports = {
   ]
 };
 EOF
+    fi
+    
+    # Install mock-pms dependencies if mock PMS is needed
+    if [[ -z "$PMS_BASE_URL" ]]; then
+        log "Installing mock PMS dependencies..."
+        cd $APP_DIR/mock-pms
+        npm install --production
+        cd $APP_DIR
+    fi
     
     # Start the application
     pm2 start ecosystem.config.js
@@ -563,7 +625,11 @@ EOF
     # Setup PM2 startup script
     sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u $USER --hp $HOME
     
-    log "PM2 configured successfully!"
+    if [[ -z "$PMS_BASE_URL" ]]; then
+        log "PM2 configured with mock PMS server!"
+    else
+        log "PM2 configured successfully!"
+    fi
 }
 
 # Initialize database

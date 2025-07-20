@@ -227,11 +227,13 @@ router.get('/guests', [
         lastName: 'Smith',
         name: 'John Smith',
         email: 'john.smith@email.com',
-        roomNumber: 'Room-101',
+        room_number: 'Room-101',
         nationality: 'US',
         loyaltyProgram: 'Gold',
-        checkIn: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-        checkOut: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()
+        status: 'checked_in',
+        check_in_date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+        check_out_date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+        bill_total: 450.00
       },
       {
         id: 'guest-002',
@@ -239,11 +241,13 @@ router.get('/guests', [
         lastName: 'Johnson',
         name: 'Sarah Johnson',
         email: 'sarah.johnson@email.com',
-        roomNumber: 'Room-102',
+        room_number: 'Room-102',
         nationality: 'UK',
         loyaltyProgram: 'Silver',
-        checkIn: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
-        checkOut: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString()
+        status: 'checked_in',
+        check_in_date: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+        check_out_date: new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toISOString(),
+        bill_total: 580.00
       }
     ];
 
@@ -262,19 +266,8 @@ router.get('/guests', [
 
     logger.info(`PMS guests sync: ${paginatedGuests.length} guests fetched`);
 
-    res.json({
-      success: true,
-      data: {
-        guests: paginatedGuests,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredGuests.length,
-          hasMore: (page * limit) < filteredGuests.length
-        },
-        lastSync: new Date().toISOString()
-      }
-    });
+    // Return guests array directly for frontend compatibility
+    res.json(paginatedGuests);
 
   } catch (error) {
     logger.error('Error fetching guests:', error);
@@ -353,32 +346,23 @@ router.get('/reservations', [
 
     logger.info(`PMS reservations sync: ${paginatedReservations.length} reservations fetched`);
 
-    res.json({
-      success: true,
-      data: {
-        reservations: paginatedReservations.map(reservation => ({
-          id: reservation.id,
-          guestId: reservation.guestId,
-          confirmationNumber: reservation.confirmationNumber,
-          roomNumber: reservation.roomNumber,
-          roomType: reservation.roomType,
-          checkIn: reservation.arrivalDate,
-          checkOut: reservation.departureDate,
-          status: reservation.status,
-          adults: reservation.adults,
-          children: reservation.children,
-          totalAmount: reservation.totalAmount,
-          currency: reservation.currency
-        })),
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredReservations.length,
-          hasMore: (page * limit) < filteredReservations.length
-        },
-        lastSync: new Date().toISOString()
-      }
-    });
+    // Return reservations array directly for frontend compatibility
+    const reservations = paginatedReservations.map(reservation => ({
+      id: reservation.id,
+      guestId: reservation.guestId,
+      confirmationNumber: reservation.confirmationNumber,
+      roomNumber: reservation.roomNumber,
+      roomType: reservation.roomType,
+      check_in_date: reservation.arrivalDate,
+      check_out_date: reservation.departureDate,
+      status: reservation.status,
+      adults: reservation.adults,
+      children: reservation.children,
+      totalAmount: reservation.totalAmount,
+      currency: reservation.currency
+    }));
+
+    res.json(reservations);
 
   } catch (error) {
     logger.error('Error fetching reservations:', error);
@@ -525,28 +509,22 @@ router.get('/config', [
   requireAdmin
 ], async (req, res) => {
   try {
-    const [pmsBaseUrl, endpoints, pollingInterval, mockPmsEnabled] = await Promise.all([
-      Settings.get('pms_base_url', ''),
-      Settings.get('pms_endpoints', {
-        guests: '/guest/v0/guests',
-        reservations: '/reservation/v0/reservations',
-        folios: '/folio/v0/folios'
-      }),
-      Settings.get('pms_polling_interval', 15),
-      Settings.get('USE_MOCK_PMS', process.env.USE_MOCK_PMS === 'true')
-    ]);
+    const mockPmsEnabled = process.env.USE_MOCK_PMS === 'true';
+    const pmsBaseUrl = mockPmsEnabled ? process.env.MOCK_PMS_BASE_URL || `http://localhost:${process.env.MOCK_PMS_PORT || 3001}` : '';
 
-    res.json({
-      success: true,
-      data: {
-        baseUrl: pmsBaseUrl,
-        endpoints,
-        pollingInterval,
-        mockMode: mockPmsEnabled,
-        configured: !!(pmsBaseUrl || mockPmsEnabled),
-        lastUpdated: new Date().toISOString()
-      }
-    });
+    // Return configuration in the format expected by frontend
+    const config = {
+      base_url: pmsBaseUrl,
+      sync_interval: 15,
+      auto_sync: true,
+      enable_welcome_messages: true,
+      enable_farewell_messages: true,
+      connected: mockPmsEnabled || !!pmsBaseUrl,
+      mock_mode: mockPmsEnabled,
+      last_sync: new Date().toISOString()
+    };
+
+    res.json(config);
 
   } catch (error) {
     logger.error('Error fetching PMS config:', error);
@@ -591,18 +569,8 @@ router.get('/sync-history', [
       }
     ];
 
-    res.json({
-      success: true,
-      data: {
-        history: syncHistory.slice(0, limit),
-        summary: {
-          totalSyncs: syncHistory.length,
-          successfulSyncs: syncHistory.filter(s => s.status === 'success').length,
-          failedSyncs: syncHistory.filter(s => s.status === 'error').length,
-          lastSync: syncHistory[0]?.startedAt
-        }
-      }
-    });
+    // Return sync history array directly for frontend compatibility
+    res.json(syncHistory.slice(0, limit));
 
   } catch (error) {
     logger.error('Error fetching PMS sync history:', error);

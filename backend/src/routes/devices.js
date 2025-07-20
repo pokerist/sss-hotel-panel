@@ -200,7 +200,20 @@ router.get('/:deviceId', [
 
     let device;
     if (dbType === 'mongodb') {
-      device = await Device.findById(deviceId).populate('approvedBy', 'name email');
+      // Check if deviceId is a valid ObjectId, if not search by other fields
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(deviceId)) {
+        device = await Device.findById(deviceId).populate('approvedBy', 'name email');
+      } else {
+        // Search by uuid or other identifier
+        device = await Device.findOne({ 
+          $or: [
+            { uuid: deviceId },
+            { macAddress: deviceId },
+            { 'id': deviceId }
+          ]
+        }).populate('approvedBy', 'name email');
+      }
     } else {
       device = await Device.findByPk(deviceId, {
         include: [
@@ -426,7 +439,20 @@ router.put('/:deviceId', [
 
     let device;
     if (dbType === 'mongodb') {
-      device = await Device.findById(deviceId);
+      // Check if deviceId is a valid ObjectId, if not search by other fields
+      const mongoose = require('mongoose');
+      if (mongoose.Types.ObjectId.isValid(deviceId)) {
+        device = await Device.findById(deviceId);
+      } else {
+        // Search by uuid or other identifier
+        device = await Device.findOne({ 
+          $or: [
+            { uuid: deviceId },
+            { macAddress: deviceId },
+            { 'id': deviceId }
+          ]
+        });
+      }
     } else {
       device = await Device.findByPk(deviceId);
     }

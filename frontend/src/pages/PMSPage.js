@@ -124,13 +124,18 @@ const PMSPage = () => {
         })
       ]);
 
-      setPmsConfig(configRes.data);
-      setGuests(guestsRes.data);
-      setReservations(reservationsRes.data);
-      setSyncHistory(historyRes.data);
+      // Ensure data is always in the expected format
+      setPmsConfig(configRes.data || {});
+      setGuests(Array.isArray(guestsRes.data) ? guestsRes.data : (guestsRes.data?.data || []));
+      setReservations(Array.isArray(reservationsRes.data) ? reservationsRes.data : (reservationsRes.data?.data || []));
+      setSyncHistory(Array.isArray(historyRes.data) ? historyRes.data : (historyRes.data?.data || []));
     } catch (err) {
       console.error('Error fetching PMS data:', err);
       setError('Failed to load PMS data');
+      // Set empty arrays as fallbacks
+      setGuests([]);
+      setReservations([]);
+      setSyncHistory([]);
     } finally {
       setLoading(false);
     }
