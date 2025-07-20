@@ -690,11 +690,12 @@ const DeviceEditDialog = ({ open, device, onClose, onSave, onSnackbar }) => {
             label="Status"
             onChange={(e) => setFormData({ ...formData, status: e.target.value })}
           >
-            {deviceStatuses.map((status) => (
-              <MenuItem key={status.value} value={status.value}>
-                {status.label}
-              </MenuItem>
-            ))}
+            <MenuItem value="pending">Pending Approval</MenuItem>
+            <MenuItem value="approved">Approved</MenuItem>
+            <MenuItem value="active">Active</MenuItem>
+            <MenuItem value="inactive">Inactive</MenuItem>
+            <MenuItem value="rejected">Rejected</MenuItem>
+            <MenuItem value="maintenance">Maintenance</MenuItem>
           </Select>
         </FormControl>
         <TextField

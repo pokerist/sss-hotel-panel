@@ -636,7 +636,7 @@ const MessagesTab = ({ settings, onSave, onSnackbar, saving }) => {
               Guest Message Templates
             </Typography>
             <Typography variant="body2" color="text.secondary" gutterBottom>
-              Available variables: {{guest_name}}, {{room_number}}, {{check_in_time}}, {{check_out_time}}
+              Preview: Welcome, {'{{guest_name}}'} ! We hope you enjoy your stay in room {'{{room_number}}'} . Check-in: {'{{check_in_time}}'} , Check-out: {'{{check_out_time}}'} .
             </Typography>
 
             <Accordion sx={{ mt: 2 }}>
