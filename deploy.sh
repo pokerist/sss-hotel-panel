@@ -169,9 +169,16 @@ install_dependencies() {
         curl -fsSL https://pgp.mongodb.com/server-7.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-7.0.gpg --dearmor
         echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-7.0.list
         sudo apt update
-        sudo apt install -y mongodb-org
+        sudo apt install -y mongodb-org mongodb-mongosh
         sudo systemctl enable mongod
         sudo systemctl start mongod
+        
+        # Wait for MongoDB to start
+        log "Waiting for MongoDB to start..."
+        sleep 5
+        
+        # Verify MongoDB installation and connectivity
+        verify_mongodb_installation
     else
         log "Installing PostgreSQL..."
         sudo apt install -y postgresql postgresql-contrib
@@ -213,7 +220,88 @@ configure_firewall() {
     log "Firewall configured successfully!"
 }
 
-# Generate environment file
+# Verify MongoDB installation
+verify_mongodb_installation() {
+    log "Verifying MongoDB installation..."
+    
+    # Check if MongoDB service is running
+    if ! sudo systemctl is-active --quiet mongod; then
+        error "MongoDB service is not running"
+    fi
+    
+    # Test MongoDB connection using mongosh
+    local max_attempts=30
+    local attempt=1
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        if mongosh --eval "db.runCommand('ping').ok" --quiet iptv_hotel 2>/dev/null; then
+            log "MongoDB connection verified successfully"
+            break
+        else
+            if [[ $attempt -eq $max_attempts ]]; then
+                error "Failed to connect to MongoDB after $max_attempts attempts"
+            fi
+            warn "MongoDB connection attempt $attempt failed, retrying in 2 seconds..."
+            sleep 2
+            ((attempt++))
+        fi
+    done
+    
+    # Create database and basic indexes using mongosh
+    log "Setting up MongoDB database..."
+    mongosh iptv_hotel --eval "
+        // Create collections and indexes
+        db.users.createIndex({ email: 1 }, { unique: true });
+        db.users.createIndex({ role: 1 });
+        db.devices.createIndex({ mac_address: 1 }, { unique: true });
+        db.devices.createIndex({ room_number: 1 });
+        db.devices.createIndex({ status: 1 });
+        db.logs.createIndex({ timestamp: -1 });
+        db.logs.createIndex({ device_id: 1 });
+        db.logs.createIndex({ level: 1 });
+        db.settings.createIndex({ key: 1 }, { unique: true });
+        
+        print('Database indexes created successfully');
+    " --quiet
+    
+    log "MongoDB database setup completed"
+}
+
+# Check MongoDB health
+check_mongodb_health() {
+    log "Running MongoDB health check..."
+    
+    # Test basic connectivity
+    if ! mongosh --eval "db.runCommand('ping').ok" --quiet iptv_hotel 2>/dev/null; then
+        warn "MongoDB connectivity test failed"
+        return 1
+    fi
+    
+    # Test database operations
+    if ! mongosh iptv_hotel --eval "
+        // Test write operation
+        db.health_check.insertOne({timestamp: new Date(), test: 'deployment_health_check'});
+        
+        // Test read operation  
+        const doc = db.health_check.findOne({test: 'deployment_health_check'});
+        if (!doc) {
+            print('ERROR: Read operation failed');
+            quit(1);
+        }
+        
+        // Clean up test document
+        db.health_check.deleteOne({test: 'deployment_health_check'});
+        
+        print('MongoDB health check passed');
+    " --quiet 2>/dev/null; then
+        warn "MongoDB operations test failed"
+        return 1
+    fi
+    
+    log "MongoDB health check completed successfully"
+    return 0
+}
+
 # Generate environment file
 generate_env_file() {
     log "Generating environment configuration..."
@@ -569,6 +657,13 @@ deploy() {
     
     # Setup PM2
     setup_pm2
+    
+    # Final MongoDB health check (if MongoDB is used)
+    if [[ "$DB_TYPE" == "mongodb" ]]; then
+        if ! check_mongodb_health; then
+            error "MongoDB health check failed. Please check the database setup."
+        fi
+    fi
     
     # Initialize database
     initialize_database
