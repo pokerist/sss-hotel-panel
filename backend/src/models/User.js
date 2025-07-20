@@ -224,9 +224,9 @@ const staticMethods = {
       const doc = await collection.findOne({ email: email.toLowerCase() });
       if (!doc) return null;
       
-      // Convert plain object to mongoose document
+      // Convert plain object to mongoose document properly - hydrate preserves existing state
       const UserModel = mongoose.model('User');
-      return new UserModel(doc);
+      return UserModel.hydrate(doc);
     } else {
       // Use Sequelize model directly  
       const sequelize = database.getSequelize();
@@ -244,9 +244,9 @@ const staticMethods = {
       const doc = await collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
       if (!doc) return null;
       
-      // Convert plain object to mongoose document
+      // Convert plain object to mongoose document properly - hydrate preserves existing state
       const UserModel = mongoose.model('User');
-      return new UserModel(doc);
+      return UserModel.hydrate(doc);
     } else {
       // Use Sequelize model directly
       const sequelize = database.getSequelize();
