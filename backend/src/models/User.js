@@ -218,23 +218,41 @@ const staticMethods = {
   async findByEmail(email) {
     const dbType = process.env.DB_TYPE || 'mongodb';
     if (dbType === 'mongodb') {
-      return await User.findOne({ email: email.toLowerCase() });
+      // Use mongoose model directly to avoid recursion
+      return await mongoose.model('User').findOne({ email: email.toLowerCase() });
     } else {
-      return await User.findOne({ where: { email: email.toLowerCase() } });
+      // Use Sequelize model directly  
+      const sequelize = database.getSequelize();
+      const UserModel = sequelize.models.User;
+      return await UserModel.findOne({ where: { email: email.toLowerCase() } });
     }
   },
 
   async findById(id) {
     const dbType = process.env.DB_TYPE || 'mongodb';
     if (dbType === 'mongodb') {
-      return await User.findById(id);
+      // Use mongoose model directly to avoid recursion
+      return await mongoose.model('User').findById(id);
     } else {
-      return await User.findByPk(id);
+      // Use Sequelize model directly
+      const sequelize = database.getSequelize();
+      const UserModel = sequelize.models.User;
+      return await UserModel.findByPk(id);
     }
   },
 
   async createUser(userData) {
-    const user = new User(userData);
+    const dbType = process.env.DB_TYPE || 'mongodb';
+    let user;
+    
+    if (dbType === 'mongodb') {
+      user = new (mongoose.model('User'))(userData);
+    } else {
+      const sequelize = database.getSequelize();
+      const UserModel = sequelize.models.User;
+      user = UserModel.build(userData);
+    }
+    
     if (userData.password) {
       await user.setPassword(userData.password);
     }

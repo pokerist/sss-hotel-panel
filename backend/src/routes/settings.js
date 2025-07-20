@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, query, validationResult } = require('express-validator');
 const Settings = require('../models/Settings');
+const User = require('../models/User');
 const { authenticateToken, requireSuperAdmin, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -14,22 +15,13 @@ router.get('/', [
   try {
     const settings = await Settings.getAllEditable();
     
-    // Group settings by category
-    const groupedSettings = settings.reduce((acc, setting) => {
-      if (!acc[setting.category]) {
-        acc[setting.category] = [];
-      }
-      acc[setting.category].push(setting);
-      return acc;
-    }, {});
-
-    res.json({
-      success: true,
-      data: {
-        settings: groupedSettings,
-        categories: Object.keys(groupedSettings)
-      }
+    // Convert settings to flat key-value object for frontend compatibility
+    const flatSettings = {};
+    settings.forEach(setting => {
+      flatSettings[setting.key] = setting.value;
     });
+
+    res.json(flatSettings);
 
   } catch (error) {
     logger.error('Error fetching settings:', error);
@@ -72,6 +64,102 @@ router.get('/category/:category', [
   }
 });
 
+// Update single setting (Frontend compatible)
+router.put('/', [
+  authenticateToken,
+  requireAdmin,
+  logActivity('UPDATE_SETTING'),
+  body('key').isString().notEmpty(),
+  body('value').exists()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { key, value } = req.body;
+    
+    // Special permission checks for certain settings
+    if (key === 'pms_base_url' || key === 'pms_endpoints') {
+      if (!req.user.hasPermission('canConfigurePMS')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Insufficient permissions to modify PMS settings'
+        });
+      }
+    }
+
+    if (key === 'panel_name') {
+      if (!req.user.hasPermission('canChangeBranding')) {
+        return res.status(403).json({
+          success: false,
+          message: 'Insufficient permissions to modify branding settings'
+        });
+      }
+    }
+
+    const updatedSetting = await Settings.set(key, value, req.user.id);
+
+    // Emit setting change event for real-time updates
+    if (global.io) {
+      global.io.to('admin:settings').emit('setting:updated', {
+        key,
+        value,
+        updatedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info(`Setting updated: ${key}`, {
+      userId: req.user.id,
+      oldValue: updatedSetting.value !== value ? 'CHANGED' : 'SAME',
+      newValue: updatedSetting.isSecret ? '***HIDDEN***' : value
+    });
+
+    res.json({
+      success: true,
+      message: 'Setting updated successfully',
+      data: {
+        setting: updatedSetting
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error updating setting:', error);
+    
+    if (error.message.includes('not found')) {
+      return res.status(404).json({
+        success: false,
+        message: 'Setting not found'
+      });
+    }
+
+    if (error.message.includes('not editable')) {
+      return res.status(403).json({
+        success: false,
+        message: 'Setting is not editable'
+      });
+    }
+
+    if (error.message.includes('validation') || error.message.includes('must be')) {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update setting'
+    });
+  }
+});
+
 // Get specific setting value
 router.get('/:key', [
   authenticateToken,
@@ -106,7 +194,7 @@ router.get('/:key', [
   }
 });
 
-// Update specific setting
+// Update specific setting by key parameter
 router.put('/:key', [
   authenticateToken,
   requireAdmin,
@@ -202,8 +290,8 @@ router.put('/:key', [
   }
 });
 
-// Update multiple settings at once
-router.put('/', [
+// Update multiple settings at once (when body contains settings array)
+router.put('/bulk', [
   authenticateToken,
   requireAdmin,
   logActivity('UPDATE_MULTIPLE_SETTINGS'),
@@ -580,6 +668,302 @@ router.get('/system/health', [
     res.status(500).json({
       success: false,
       message: 'Failed to fetch system health settings'
+    });
+  }
+});
+
+// USER MANAGEMENT ENDPOINTS
+
+// Get all users (Admin access)
+router.get('/users', [
+  authenticateToken,
+  requireAdmin
+], async (req, res) => {
+  try {
+    const dbType = process.env.DB_TYPE || 'mongodb';
+    let users;
+    
+    if (dbType === 'mongodb') {
+      users = await User.find().select('-password -refreshTokens').sort({ createdAt: -1 });
+    } else {
+      users = await User.findAll({
+        attributes: { exclude: ['password', 'refreshTokens'] },
+        order: [['createdAt', 'DESC']]
+      });
+    }
+
+    res.json(users);
+
+  } catch (error) {
+    logger.error('Error fetching users:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch users'
+    });
+  }
+});
+
+// Create new user (Super Admin only)
+router.post('/users', [
+  authenticateToken,
+  requireSuperAdmin,
+  logActivity('CREATE_USER'),
+  body('email').isEmail().normalizeEmail(),
+  body('password').isLength({ min: 6 }),
+  body('name').isLength({ min: 1, max: 100 }),
+  body('role').isIn(['admin', 'super_admin']).optional()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { email, password, name, role = 'admin' } = req.body;
+
+    // Check if user already exists
+    const existingUser = await User.findByEmail(email);
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: 'User with this email already exists'
+      });
+    }
+
+    // Create user
+    const newUser = await User.createUser({
+      email,
+      password,
+      name,
+      role
+    });
+
+    // Emit user created event
+    if (global.io) {
+      global.io.to('admin:settings').emit('user:created', {
+        user: newUser.toJSON(),
+        createdBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info(`User created: ${email}`, {
+      userId: req.user.id,
+      createdUserId: newUser.id,
+      role: role
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      data: {
+        user: newUser.toJSON()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error creating user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create user'
+    });
+  }
+});
+
+// Update user (Super Admin only, or admin updating themselves)
+router.put('/users/:id', [
+  authenticateToken,
+  logActivity('UPDATE_USER'),
+  body('email').optional().isEmail().normalizeEmail(),
+  body('password').optional().isLength({ min: 6 }),
+  body('name').optional().isLength({ min: 1, max: 100 }),
+  body('role').optional().isIn(['admin', 'super_admin'])
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { id } = req.params;
+    const { email, password, name, role } = req.body;
+
+    // Find user to update
+    const userToUpdate = await User.findById(id);
+    if (!userToUpdate) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Permission checks
+    const isUpdatingSelf = req.user.id === id;
+    const isSuperAdmin = req.user.role === 'super_admin';
+
+    if (!isUpdatingSelf && !isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only update your own profile or you must be a super admin'
+      });
+    }
+
+    // Only super admin can change roles
+    if (role && role !== userToUpdate.role && !isSuperAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only super admin can change user roles'
+      });
+    }
+
+    // Prevent super admin from demoting themselves
+    if (isUpdatingSelf && req.user.role === 'super_admin' && role && role !== 'super_admin') {
+      return res.status(400).json({
+        success: false,
+        message: 'Super admin cannot demote themselves'
+      });
+    }
+
+    // Check email uniqueness
+    if (email && email !== userToUpdate.email) {
+      const existingUser = await User.findByEmail(email);
+      if (existingUser && existingUser.id !== id) {
+        return res.status(409).json({
+          success: false,
+          message: 'Email already exists'
+        });
+      }
+    }
+
+    // Update user fields
+    if (name) userToUpdate.name = name;
+    if (email) userToUpdate.email = email;
+    if (role) userToUpdate.role = role;
+    
+    if (password) {
+      await userToUpdate.setPassword(password);
+    }
+
+    // Set permissions based on role
+    if (role === 'super_admin') {
+      userToUpdate.permissions = {
+        canDeleteDevices: true,
+        canManageAdmins: true,
+        canChangeBranding: true,
+        canConfigurePMS: true
+      };
+    } else if (role === 'admin' && userToUpdate.role !== 'admin') {
+      userToUpdate.permissions = {
+        canDeleteDevices: false,
+        canManageAdmins: false,
+        canChangeBranding: false,
+        canConfigurePMS: false
+      };
+    }
+
+    await userToUpdate.save();
+
+    // Emit user updated event
+    if (global.io) {
+      global.io.to('admin:settings').emit('user:updated', {
+        user: userToUpdate.toJSON(),
+        updatedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info(`User updated: ${userToUpdate.email}`, {
+      userId: req.user.id,
+      updatedUserId: userToUpdate.id,
+      changedFields: Object.keys(req.body)
+    });
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: {
+        user: userToUpdate.toJSON()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error updating user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update user'
+    });
+  }
+});
+
+// Delete user (Super Admin only)
+router.delete('/users/:id', [
+  authenticateToken,
+  requireSuperAdmin,
+  logActivity('DELETE_USER')
+], async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Prevent super admin from deleting themselves
+    if (req.user.id === id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot delete yourself'
+      });
+    }
+
+    // Find user to delete
+    const userToDelete = await User.findById(id);
+    if (!userToDelete) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const deletedUserEmail = userToDelete.email;
+
+    // Delete user
+    const dbType = process.env.DB_TYPE || 'mongodb';
+    if (dbType === 'mongodb') {
+      await userToDelete.deleteOne();
+    } else {
+      await userToDelete.destroy();
+    }
+
+    // Emit user deleted event
+    if (global.io) {
+      global.io.to('admin:settings').emit('user:deleted', {
+        userId: id,
+        email: deletedUserEmail,
+        deletedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info(`User deleted: ${deletedUserEmail}`, {
+      userId: req.user.id,
+      deletedUserId: id
+    });
+
+    res.json({
+      success: true,
+      message: 'User deleted successfully'
+    });
+
+  } catch (error) {
+    logger.error('Error deleting user:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete user'
     });
   }
 });
