@@ -218,8 +218,15 @@ const staticMethods = {
   async findByEmail(email) {
     const dbType = process.env.DB_TYPE || 'mongodb';
     if (dbType === 'mongodb') {
-      // Use mongoose model directly to avoid recursion
-      return await mongoose.model('User').findOne({ email: email.toLowerCase() });
+      // Use native mongoose query to avoid recursion - don't call findOne on the model
+      const connection = mongoose.connection;
+      const collection = connection.collection('users');
+      const doc = await collection.findOne({ email: email.toLowerCase() });
+      if (!doc) return null;
+      
+      // Convert plain object to mongoose document
+      const UserModel = mongoose.model('User');
+      return new UserModel(doc);
     } else {
       // Use Sequelize model directly  
       const sequelize = database.getSequelize();
@@ -231,8 +238,15 @@ const staticMethods = {
   async findById(id) {
     const dbType = process.env.DB_TYPE || 'mongodb';
     if (dbType === 'mongodb') {
-      // Use mongoose model directly to avoid recursion
-      return await mongoose.model('User').findById(id);
+      // Use native mongoose query to avoid recursion - don't call findById on the model
+      const connection = mongoose.connection;
+      const collection = connection.collection('users');
+      const doc = await collection.findOne({ _id: new mongoose.Types.ObjectId(id) });
+      if (!doc) return null;
+      
+      // Convert plain object to mongoose document
+      const UserModel = mongoose.model('User');
+      return new UserModel(doc);
     } else {
       // Use Sequelize model directly
       const sequelize = database.getSequelize();
@@ -246,7 +260,8 @@ const staticMethods = {
     let user;
     
     if (dbType === 'mongodb') {
-      user = new (mongoose.model('User'))(userData);
+      const UserModel = mongoose.model('User');
+      user = new UserModel(userData);
     } else {
       const sequelize = database.getSequelize();
       const UserModel = sequelize.models.User;
