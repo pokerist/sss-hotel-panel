@@ -575,10 +575,9 @@ initialize_database() {
     # Wait for application to start
     sleep 10
     
-    # Create initialization script
+    # Create initialization script (MongoDB only)
     cat > initialize.js << 'EOF'
 const mongoose = require('mongoose');
-const { Sequelize } = require('sequelize');
 require('dotenv').config();
 
 const User = require('./src/models/User');
@@ -587,7 +586,7 @@ const database = require('./src/config/database');
 
 async function initialize() {
     try {
-        console.log('Connecting to database...');
+        console.log('Connecting to MongoDB database...');
         await database.connect();
         
         console.log('Initializing default settings...');
@@ -602,12 +601,14 @@ async function initialize() {
         });
         
         console.log('Super admin created successfully:', superAdmin.email);
-        console.log('Initialization completed!');
+        console.log('MongoDB initialization completed!');
         
         await database.disconnect();
         process.exit(0);
     } catch (error) {
         console.error('Initialization failed:', error);
+        console.error('Error details:', error.message);
+        await database.disconnect();
         process.exit(1);
     }
 }
