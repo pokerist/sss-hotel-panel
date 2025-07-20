@@ -2,6 +2,7 @@ const express = require('express');
 const { query, validationResult } = require('express-validator');
 const axios = require('axios');
 const Settings = require('../models/Settings');
+const Log = require('../models/Log');
 const { authenticateToken, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
 
@@ -473,24 +474,39 @@ router.post('/sync', [
   logActivity('TRIGGER_PMS_SYNC')
 ], async (req, res) => {
   try {
-    // This would trigger the PMS sync service
-    // For now, just return success
-    logger.info('Manual PMS sync triggered', { userId: req.user.id });
+    // Create sync start log
+    const startTime = new Date();
+    const syncLog = new Log({
+      type: 'PMS_SYNC',
+      level: 'info',
+      message: 'Manual PMS sync started',
+      userId: req.user.id,
+      metadata: {
+        startTime,
+        triggeredBy: req.user.name,
+        manual: true
+      }
+    });
+    await syncLog.save();
 
     // Emit real-time event
     if (global.io) {
       global.io.to('admin:pms').emit('pms:sync-started', {
         triggeredBy: req.user.name,
-        timestamp: new Date().toISOString()
+        timestamp: startTime.toISOString()
       });
     }
+
+    // Update last sync time in settings
+    await Settings.set('pms_last_sync', startTime, req.user.id);
 
     res.json({
       success: true,
       message: 'PMS synchronization started',
       data: {
-        startedAt: new Date().toISOString(),
-        triggeredBy: req.user.name
+        startedAt: startTime.toISOString(),
+        triggeredBy: req.user.name,
+        logId: syncLog._id
       }
     });
 
@@ -509,19 +525,33 @@ router.get('/config', [
   requireAdmin
 ], async (req, res) => {
   try {
-    const mockPmsEnabled = process.env.USE_MOCK_PMS === 'true';
-    const pmsBaseUrl = mockPmsEnabled ? process.env.MOCK_PMS_BASE_URL || `http://localhost:${process.env.MOCK_PMS_PORT || 3001}` : '';
+    const [
+      mockPmsEnabled,
+      pmsBaseUrl,
+      syncInterval,
+      autoSync,
+      welcomeMessages,
+      farewellMessages,
+      lastSync
+    ] = await Promise.all([
+      Settings.get('USE_MOCK_PMS', process.env.USE_MOCK_PMS === 'true'),
+      Settings.get('pms_base_url', ''),
+      Settings.get('pms_polling_interval', 15),
+      Settings.get('pms_auto_sync', true),
+      Settings.get('pms_welcome_messages', true),
+      Settings.get('pms_farewell_messages', true),
+      Log.findOne({ type: 'PMS_SYNC', level: 'info' }).sort({ timestamp: -1 }).select('timestamp')
+    ]);
 
-    // Return configuration in the format expected by frontend
     const config = {
-      base_url: pmsBaseUrl,
-      sync_interval: 15,
-      auto_sync: true,
-      enable_welcome_messages: true,
-      enable_farewell_messages: true,
+      base_url: mockPmsEnabled ? process.env.MOCK_PMS_BASE_URL || `http://localhost:${process.env.MOCK_PMS_PORT || 3001}` : pmsBaseUrl,
+      sync_interval: syncInterval,
+      auto_sync: autoSync,
+      enable_welcome_messages: welcomeMessages,
+      enable_farewell_messages: farewellMessages,
       connected: mockPmsEnabled || !!pmsBaseUrl,
       mock_mode: mockPmsEnabled,
-      last_sync: new Date().toISOString()
+      last_sync: lastSync?.timestamp || new Date().toISOString()
     };
 
     res.json(config);
@@ -544,33 +574,31 @@ router.get('/sync-history', [
   try {
     const { limit = 20 } = req.query;
 
-    // This would fetch from log database
-    // For now, return mock data
-    const syncHistory = [
-      {
-        id: '1',
-        startedAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-        completedAt: new Date(Date.now() - 14 * 60 * 1000).toISOString(),
-        status: 'success',
-        guestsSync: 25,
-        reservationsSync: 18,
-        foliosSync: 22,
-        errors: 0
-      },
-      {
-        id: '2',
-        startedAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-        completedAt: new Date(Date.now() - 29 * 60 * 1000).toISOString(),
-        status: 'success',
-        guestsSync: 23,
-        reservationsSync: 16,
-        foliosSync: 20,
-        errors: 0
-      }
-    ];
+    // Get sync logs from database
+    const syncLogs = await Log.find({
+      type: 'PMS_SYNC',
+      level: { $in: ['info', 'error'] }
+    })
+    .sort({ timestamp: -1 })
+    .limit(parseInt(limit));
 
-    // Return sync history array directly for frontend compatibility
-    res.json(syncHistory.slice(0, limit));
+    // Transform logs into sync history format
+    const syncHistory = syncLogs.map(log => {
+      const data = log.metadata || {};
+      return {
+        id: log._id,
+        startedAt: data.startTime || log.timestamp,
+        completedAt: data.endTime || log.timestamp,
+        status: log.level === 'error' ? 'error' : 'success',
+        guestsSync: data.guestsCount || 0,
+        reservationsSync: data.reservationsCount || 0,
+        foliosSync: data.foliosCount || 0,
+        errors: data.errorCount || (log.level === 'error' ? 1 : 0),
+        details: log.level === 'error' ? log.message : undefined
+      };
+    });
+
+    res.json(syncHistory);
 
   } catch (error) {
     logger.error('Error fetching PMS sync history:', error);

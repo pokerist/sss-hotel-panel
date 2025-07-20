@@ -17,102 +17,68 @@ router.get('/', [
   query('roomNumber').optional().isString(),
   query('search').optional().isLength({ min: 1, max: 100 })
 ], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const {
-      page = 1,
-      limit = 50,
-      status,
-      connectionStatus,
-      roomNumber,
-      search
-    } = req.query;
-
-    // Mock devices data for now since database is likely empty
-    const mockDevices = [
-      {
-        id: 'device-001',
-        uuid: 'device-001-uuid',
-        macAddress: '00:11:22:33:44:55',
-        roomNumber: 'Room-101',
-        status: 'approved',
-        connectionStatus: 'online',
-        lastHeartbeat: new Date().toISOString(),
-        firstContact: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-        deviceInfo: {
-          manufacturer: 'Samsung',
-          model: 'Smart TV',
-          androidVersion: '9.0'
-        },
-        createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'device-002', 
-        uuid: 'device-002-uuid',
-        macAddress: '00:11:22:33:44:66',
-        roomNumber: 'Room-102',
-        status: 'pending',
-        connectionStatus: 'offline',
-        lastHeartbeat: null,
-        firstContact: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        deviceInfo: {
-          manufacturer: 'LG',
-          model: 'Smart TV',
-          androidVersion: '10.0'
-        },
-        createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    // Apply filters to mock data
-    let filteredDevices = mockDevices;
-    if (status) {
-      filteredDevices = filteredDevices.filter(device => device.status === status);
-    }
-    if (connectionStatus) {
-      filteredDevices = filteredDevices.filter(device => device.connectionStatus === connectionStatus);
-    }
-    if (roomNumber) {
-      filteredDevices = filteredDevices.filter(device => device.roomNumber === roomNumber);
-    }
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filteredDevices = filteredDevices.filter(device => 
-        device.uuid.toLowerCase().includes(searchLower) ||
-        device.macAddress.toLowerCase().includes(searchLower) ||
-        device.roomNumber.toLowerCase().includes(searchLower)
-      );
-    }
-
-    // For frontend compatibility - return just the array if no pagination params
-    if (!req.query.page && !req.query.limit) {
-      return res.json(filteredDevices);
-    }
-
-    // Pagination
-    const startIndex = (page - 1) * limit;
-    const paginatedDevices = filteredDevices.slice(startIndex, startIndex + parseInt(limit));
-
-    res.json({
-      success: true,
-      data: {
-        devices: paginatedDevices,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredDevices.length,
-          pages: Math.ceil(filteredDevices.length / limit)
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
         }
-      }
-    });
+
+        const {
+            page = 1,
+            limit = 50,
+            status,
+            connectionStatus,
+            roomNumber,
+            search
+        } = req.query;
+
+        // Build query
+        const query = {};
+        if (status) query.status = status;
+        if (connectionStatus) query.connectionStatus = connectionStatus;
+        if (roomNumber) query.roomNumber = roomNumber;
+        if (search) {
+            query.$or = [
+                { uuid: { $regex: search, $options: 'i' } },
+                { macAddress: { $regex: search, $options: 'i' } },
+                { roomNumber: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // For frontend compatibility - return all devices if no pagination params
+        if (!req.query.page && !req.query.limit) {
+            const devices = await Device.find(query)
+                .populate('approvedBy', 'name email')
+                .sort({ createdAt: -1 });
+            return res.json(devices);
+        }
+
+        // Get paginated results
+        const [devices, total] = await Promise.all([
+            Device.find(query)
+                .populate('approvedBy', 'name email')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(parseInt(limit)),
+            Device.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                devices,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit)
+                }
+            }
+        });
 
   } catch (error) {
     logger.error('Error fetching devices:', error);

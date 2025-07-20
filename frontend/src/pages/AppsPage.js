@@ -659,8 +659,8 @@ const AppDialog = ({ open, app, onClose, onSave, onSnackbar }) => {
   const [formData, setFormData] = useState({
     name: '',
     description: '',
-    package_name: '',
-    store_url: '',
+    packageName: '',
+    url: '',
     icon: null,
     category: ''
   });
@@ -672,8 +672,8 @@ const AppDialog = ({ open, app, onClose, onSave, onSnackbar }) => {
       setFormData({
         name: app.name || '',
         description: app.description || '',
-        package_name: app.package_name || '',
-        store_url: app.store_url || '',
+        packageName: app.packageName || '',
+        url: app.url || '',
         icon: null,
         category: app.category || ''
       });
@@ -682,8 +682,8 @@ const AppDialog = ({ open, app, onClose, onSave, onSnackbar }) => {
       setFormData({
         name: '',
         description: '',
-        package_name: '',
-        store_url: '',
+        packageName: '',
+        url: '',
         icon: null,
         category: ''
       });
@@ -717,8 +717,8 @@ const AppDialog = ({ open, app, onClose, onSave, onSnackbar }) => {
       
       submitData.append('name', formData.name);
       submitData.append('description', formData.description);
-      submitData.append('package_name', formData.package_name);
-      submitData.append('store_url', formData.store_url);
+      submitData.append('packageName', formData.packageName);
+      submitData.append('url', formData.url);
       submitData.append('category', formData.category);
       
       if (formData.icon) {
@@ -771,16 +771,16 @@ const AppDialog = ({ open, app, onClose, onSave, onSnackbar }) => {
             <TextField
               fullWidth
               label="Package Name"
-              value={formData.package_name}
-              onChange={(e) => setFormData({ ...formData, package_name: e.target.value })}
+              value={formData.packageName}
+              onChange={(e) => setFormData({ ...formData, packageName: e.target.value })}
               margin="dense"
               helperText="e.g., com.netflix.mediaclient"
             />
             <TextField
               fullWidth
               label="Store URL"
-              value={formData.store_url}
-              onChange={(e) => setFormData({ ...formData, store_url: e.target.value })}
+              value={formData.url}
+              onChange={(e) => setFormData({ ...formData, url: e.target.value })}
               margin="dense"
               helperText="Google Play Store or APK download URL"
             />

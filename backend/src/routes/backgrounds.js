@@ -4,6 +4,8 @@ const path = require('path');
 const { body, query, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const Background = require('../models/Background');
+const BackgroundBundle = require('../models/BackgroundBundle');
 
 const router = express.Router();
 
@@ -57,93 +59,58 @@ router.get('/', [
   query('type').optional().isIn(['image', 'video']),
   query('bundleId').optional().isString()
 ], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { page = 1, limit = 20, type, bundleId } = req.query;
-
-    // Mock data for now - in full implementation, this would query the database
-    const backgrounds = [
-      {
-        id: '1',
-        name: 'Nature Landscape',
-        filename: 'nature-landscape.jpg',
-        type: 'image',
-        size: 2048576,
-        dimensions: { width: 1920, height: 1080 },
-        duration: null,
-        bundleId: 'bundle-1',
-        path: '/uploads/backgrounds/nature-landscape.jpg',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: '2',
-        name: 'Ocean Waves',
-        filename: 'ocean-waves.mp4',
-        type: 'video',
-        size: 15728640,
-        dimensions: { width: 1920, height: 1080 },
-        duration: 30,
-        bundleId: 'bundle-1',
-        path: '/uploads/backgrounds/ocean-waves.mp4',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: '3',
-        name: 'City Skyline',
-        filename: 'city-skyline.jpg',
-        type: 'image',
-        size: 3145728,
-        dimensions: { width: 1920, height: 1080 },
-        duration: null,
-        bundleId: 'bundle-2',
-        path: '/uploads/backgrounds/city-skyline.jpg',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
-
-    // Filter by type
-    let filteredBackgrounds = backgrounds;
-    if (type) {
-      filteredBackgrounds = backgrounds.filter(bg => bg.type === type);
-    }
-
-    // Filter by bundle
-    if (bundleId) {
-      filteredBackgrounds = filteredBackgrounds.filter(bg => bg.bundleId === bundleId);
-    }
-
-    // For frontend compatibility - return just the array if no pagination params
-    if (!req.query.page && !req.query.limit) {
-      return res.json(filteredBackgrounds);
-    }
-
-    // Pagination
-    const startIndex = (page - 1) * limit;
-    const paginatedBackgrounds = filteredBackgrounds.slice(startIndex, startIndex + parseInt(limit));
-
-    res.json({
-      success: true,
-      data: {
-        backgrounds: paginatedBackgrounds,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredBackgrounds.length,
-          pages: Math.ceil(filteredBackgrounds.length / limit)
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
         }
-      }
-    });
+
+        const { page = 1, limit = 20, type, search } = req.query;
+
+        // Build query
+        const query = {};
+        if (type) query.type = type;
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { 'metadata.tags': { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // For frontend compatibility - return all backgrounds if no pagination params
+        if (!req.query.page && !req.query.limit) {
+            const backgrounds = await Background.find(query)
+                .populate('uploadedBy', 'name email')
+                .sort({ createdAt: -1 });
+            return res.json(backgrounds);
+        }
+
+        // Get paginated results
+        const [backgrounds, total] = await Promise.all([
+            Background.find(query)
+                .populate('uploadedBy', 'name email')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(parseInt(limit)),
+            Background.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                backgrounds,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit)
+                }
+            }
+        });
 
   } catch (error) {
     logger.error('Error fetching backgrounds:', error);
@@ -159,46 +126,54 @@ router.post('/upload', [
   authenticateToken,
   requireAdmin,
   logActivity('UPLOAD_BACKGROUND'),
-  upload.single('background')
+  upload.array('background', 10) // Support up to 10 files
 ], async (req, res) => {
   try {
-    if (!req.file) {
+    if (!req.files || req.files.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'No file uploaded'
+        message: 'No files uploaded'
       });
     }
 
-    const file = req.file;
-    const isVideo = ['mp4', 'avi', 'mkv', 'webm'].includes(path.extname(file.filename).toLowerCase().substring(1));
+    const backgrounds = [];
+    
+    for (const file of req.files) {
+      const isVideo = ['mp4', 'avi', 'mkv', 'webm'].includes(path.extname(file.filename).toLowerCase().substring(1));
 
-    // Mock background record - in full implementation, this would save to database
-    const background = {
-      id: `bg-${Date.now()}`,
-      name: req.body.name || path.parse(file.originalname).name,
-      filename: file.filename,
-      originalName: file.originalname,
-      type: isVideo ? 'video' : 'image',
-      size: file.size,
-      path: `/uploads/backgrounds/${file.filename}`,
-      mimeType: file.mimetype,
-      uploadedBy: req.user.id,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      const background = new Background({
+        name: req.body.name || path.parse(file.originalname).name,
+        filename: file.filename,
+        originalName: file.originalname,
+        type: isVideo ? 'video' : 'image',
+        size: file.size,
+        url: `/uploads/backgrounds/${file.filename}`,
+        mimeType: file.mimetype,
+        uploadedBy: req.user.id,
+        metadata: {
+          tags: req.body.tags ? req.body.tags.split(',').map(tag => tag.trim()) : [],
+          season: req.body.season || 'all',
+          timeOfDay: req.body.timeOfDay || 'all'
+        }
+      });
 
-    logger.info('Background uploaded successfully', {
+      await background.save();
+      backgrounds.push(background);
+    }
+
+    logger.info('Backgrounds uploaded successfully', {
       userId: req.user.id,
-      filename: file.filename,
-      originalName: file.originalname,
-      size: file.size,
-      type: background.type
+      count: req.files.length,
+      files: req.files.map(f => f.originalname)
     });
 
     res.status(201).json({
       success: true,
-      message: 'Background uploaded successfully',
-      data: { background }
+      message: `${backgrounds.length} background(s) uploaded successfully`,
+      data: { 
+        backgrounds,
+        count: backgrounds.length
+      }
     });
 
   } catch (error) {
@@ -216,33 +191,28 @@ router.get('/bundles', [
   requireAdmin
 ], async (req, res) => {
   try {
-    // Mock bundles data - in full implementation, this would query the database
-    const bundles = [
-      {
-        id: 'bundle-1',
-        name: 'Nature Collection',
-        description: 'Beautiful nature scenes and landscapes',
-        backgroundCount: 5,
-        totalSize: 25600000,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: 'bundle-2',
-        name: 'Hotel Branding',
-        description: 'Hotel branded backgrounds and promotional content',
-        backgroundCount: 3,
-        totalSize: 12800000,
-        isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
+    const bundles = await BackgroundBundle.find()
+      .populate('createdBy', 'name email')
+      .populate('backgrounds')
+      .sort({ createdAt: -1 });
+
+    // Transform bundles to include statistics
+    const bundlesWithStats = bundles.map(bundle => ({
+      id: bundle._id,
+      name: bundle.name,
+      description: bundle.description,
+      backgroundCount: bundle.backgrounds.length,
+      totalSize: bundle.statistics.totalSize,
+      imageCount: bundle.statistics.imageCount,
+      videoCount: bundle.statistics.videoCount,
+      isActive: bundle.isActive,
+      createdAt: bundle.createdAt,
+      updatedAt: bundle.updatedAt
+    }));
 
     res.json({
       success: true,
-      data: { bundles }
+      data: { bundles: bundlesWithStats }
     });
 
   } catch (error) {
@@ -275,18 +245,28 @@ router.post('/bundles', [
 
     const { name, description, backgroundIds } = req.body;
 
-    // Mock bundle creation - in full implementation, this would save to database
-    const bundle = {
-      id: `bundle-${Date.now()}`,
+    // Verify backgrounds exist
+    const backgrounds = await Background.find({ _id: { $in: backgroundIds } });
+    if (backgrounds.length !== backgroundIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some backgrounds were not found'
+      });
+    }
+
+    const bundle = new BackgroundBundle({
       name,
       description,
-      backgroundIds,
-      backgroundCount: backgroundIds.length,
-      isActive: true,
+      backgrounds: backgroundIds,
       createdBy: req.user.id,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      settings: {
+        displayDuration: req.body.displayDuration || 30,
+        transitionEffect: req.body.transitionEffect || 'fade',
+        shuffleEnabled: req.body.shuffleEnabled || false
+      }
+    });
+
+    await bundle.save();
 
     logger.info('Background bundle created', {
       userId: req.user.id,
@@ -338,29 +318,69 @@ router.post('/assign', [
       });
     }
 
-    // Mock assignment - in full implementation, this would update device configurations
-    const assignments = [];
-
-    if (deviceIds) {
-      deviceIds.forEach(deviceId => {
-        assignments.push({
-          type: 'device',
-          id: deviceId,
-          bundleId,
-          assignedAt: new Date().toISOString()
-        });
+    // Verify bundle exists
+    const bundle = await BackgroundBundle.findById(bundleId);
+    if (!bundle) {
+      return res.status(404).json({
+        success: false,
+        message: 'Background bundle not found'
       });
     }
 
-    if (roomNumbers) {
-      roomNumbers.forEach(roomNumber => {
+    const Device = require('../models/Device');
+    const assignments = [];
+
+    if (deviceIds) {
+      // Find devices and verify they exist
+      const devices = await Device.find({ _id: { $in: deviceIds } });
+      if (devices.length !== deviceIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Some devices were not found'
+        });
+      }
+
+      // Update each device's configuration
+      for (const device of devices) {
+        device.configuration = device.configuration || {};
+        device.configuration.backgroundBundle = bundleId;
+        await device.save();
+
         assignments.push({
-          type: 'room',
-          id: roomNumber,
+          type: 'device',
+          id: device.id,
           bundleId,
           assignedAt: new Date().toISOString()
         });
-      });
+      }
+    }
+
+    if (roomNumbers) {
+      // Find devices by room numbers
+      const devices = await Device.find({ roomNumber: { $in: roomNumbers } });
+      const foundRooms = devices.map(d => d.roomNumber);
+      const missingRooms = roomNumbers.filter(r => !foundRooms.includes(r));
+      
+      if (missingRooms.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `No devices found for rooms: ${missingRooms.join(', ')}`
+        });
+      }
+
+      // Update each device's configuration
+      for (const device of devices) {
+        device.configuration = device.configuration || {};
+        device.configuration.backgroundBundle = bundleId;
+        await device.save();
+
+        assignments.push({
+          type: 'room',
+          id: device.roomNumber,
+          bundleId,
+          assignedAt: new Date().toISOString()
+        });
+      }
     }
 
     // Emit real-time event
@@ -395,6 +415,62 @@ router.post('/assign', [
   }
 });
 
+// Update background
+router.put('/:backgroundId', [
+  authenticateToken,
+  requireAdmin,
+  logActivity('UPDATE_BACKGROUND'),
+  body('name').optional().isString().isLength({ min: 1, max: 100 }),
+  body('description').optional().isString().isLength({ max: 500 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { backgroundId } = req.params;
+    const { name, description } = req.body;
+
+    const background = await Background.findById(backgroundId);
+    if (!background) {
+      return res.status(404).json({
+        success: false,
+        message: 'Background not found'
+      });
+    }
+
+    // Update fields
+    if (name !== undefined) background.name = name;
+    if (description !== undefined) background.description = description;
+
+    await background.save();
+
+    logger.info('Background updated', {
+      userId: req.user.id,
+      backgroundId,
+      changes: { name, description }
+    });
+
+    res.json({
+      success: true,
+      message: 'Background updated successfully',
+      data: { background }
+    });
+
+  } catch (error) {
+    logger.error('Error updating background:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update background'
+    });
+  }
+});
+
 // Delete background
 router.delete('/:backgroundId', [
   authenticateToken,
@@ -404,10 +480,33 @@ router.delete('/:backgroundId', [
   try {
     const { backgroundId } = req.params;
 
-    // Mock deletion - in full implementation, this would delete from database and filesystem
+    const background = await Background.findById(backgroundId);
+    if (!background) {
+      return res.status(404).json({
+        success: false,
+        message: 'Background not found'
+      });
+    }
+
+    // Remove from any bundles that contain it
+    await BackgroundBundle.updateMany(
+      { backgrounds: backgroundId },
+      { $pull: { backgrounds: backgroundId } }
+    );
+
+    // Delete the file from filesystem
+    const filePath = path.join(uploadDir, background.filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    // Delete from database
+    await background.deleteOne();
+
     logger.info('Background deleted', {
       userId: req.user.id,
-      backgroundId
+      backgroundId,
+      filename: background.filename
     });
 
     res.json({
@@ -430,15 +529,42 @@ router.get('/stats/overview', [
   requireAdmin
 ], async (req, res) => {
   try {
-    // Mock statistics - in full implementation, this would query the database
+    const [
+      totalBackgrounds,
+      totalBundles,
+      typeCounts,
+      totalSize,
+      mostUsedBundle
+    ] = await Promise.all([
+      Background.countDocuments(),
+      BackgroundBundle.countDocuments(),
+      Background.aggregate([
+        { $group: { _id: '$type', count: { $sum: 1 } } }
+      ]),
+      Background.aggregate([
+        { $group: { _id: null, total: { $sum: '$size' } } }
+      ]),
+      BackgroundBundle.aggregate([
+        { $lookup: { from: 'devices', localField: '_id', foreignField: 'configuration.backgroundBundle', as: 'devices' } },
+        { $project: { name: 1, deviceCount: { $size: '$devices' } } },
+        { $sort: { deviceCount: -1 } },
+        { $limit: 1 }
+      ])
+    ]);
+
+    const typeStats = {};
+    typeCounts.forEach(type => {
+      typeStats[type._id] = type.count;
+    });
+
     const stats = {
-      totalBackgrounds: 15,
-      totalBundles: 3,
-      totalSize: '125.6 MB',
-      imageCount: 10,
-      videoCount: 5,
-      activeAssignments: 8,
-      mostUsedBundle: 'Nature Collection'
+      totalBackgrounds,
+      totalBundles,
+      totalSize: Math.round(totalSize[0]?.total / (1024 * 1024)) + ' MB',
+      imageCount: typeStats['image'] || 0,
+      videoCount: typeStats['video'] || 0,
+      activeAssignments: mostUsedBundle[0]?.deviceCount || 0,
+      mostUsedBundle: mostUsedBundle[0]?.name || 'None'
     };
 
     res.json({

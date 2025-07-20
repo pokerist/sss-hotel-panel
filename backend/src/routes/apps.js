@@ -4,6 +4,7 @@ const path = require('path');
 const { body, query, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const App = require('../models/App');
 
 const router = express.Router();
 
@@ -46,101 +47,59 @@ router.get('/', [
   query('category').optional().isString(),
   query('search').optional().isLength({ min: 1, max: 100 })
 ], async (req, res) => {
-  try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors: errors.array()
-      });
-    }
-
-    const { page = 1, limit = 20, category, search } = req.query;
-
-    // Mock data for now - in full implementation, this would query the database
-    const apps = [
-      {
-        id: '1',
-        name: 'Netflix',
-        description: 'Streaming entertainment service',
-        category: 'entertainment',
-        icon: '/uploads/app-icons/netflix.png',
-        packageName: 'com.netflix.mediaclient',
-        url: 'https://play.google.com/store/apps/details?id=com.netflix.mediaclient',
-        version: '8.0.0',
-        isActive: true,
-        assignedDevices: 12,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: '2',
-        name: 'YouTube',
-        description: 'Video sharing platform',
-        category: 'entertainment',
-        icon: '/uploads/app-icons/youtube.png',
-        packageName: 'com.google.android.youtube.tv',
-        url: 'https://play.google.com/store/apps/details?id=com.google.android.youtube.tv',
-        version: '2.0.0',
-        isActive: true,
-        assignedDevices: 15,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      },
-      {
-        id: '3',
-        name: 'Hotel Services',
-        description: 'In-room services and information',
-        category: 'utility',
-        icon: '/uploads/app-icons/hotel-services.png',
-        packageName: 'com.hotel.services',
-        url: 'https://example.com/hotel-app.apk',
-        version: '1.5.2',
-        isActive: true,
-        assignedDevices: 20,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      }
-    ];
-
-    // Filter by category
-    let filteredApps = apps;
-    if (category) {
-      filteredApps = apps.filter(app => app.category === category);
-    }
-
-    // Search filter
-    if (search) {
-      const searchLower = search.toLowerCase();
-      filteredApps = filteredApps.filter(app => 
-        app.name.toLowerCase().includes(searchLower) ||
-        app.description.toLowerCase().includes(searchLower) ||
-        app.packageName.toLowerCase().includes(searchLower)
-      );
-    }
-
-    // For frontend compatibility - return just the array if no pagination params
-    if (!req.query.page && !req.query.limit) {
-      return res.json(filteredApps);
-    }
-
-    // Pagination
-    const startIndex = (page - 1) * limit;
-    const paginatedApps = filteredApps.slice(startIndex, startIndex + parseInt(limit));
-
-    res.json({
-      success: true,
-      data: {
-        apps: paginatedApps,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: filteredApps.length,
-          pages: Math.ceil(filteredApps.length / limit)
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation failed',
+                errors: errors.array()
+            });
         }
-      }
-    });
+
+        const { page = 1, limit = 20, category, search } = req.query;
+
+        // Build query
+        const query = {};
+        if (category) query.category = category;
+        if (search) {
+            query.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { description: { $regex: search, $options: 'i' } },
+                { packageName: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        // For frontend compatibility - return all apps if no pagination params
+        if (!req.query.page && !req.query.limit) {
+            const apps = await App.find(query)
+                .populate('createdBy', 'name email')
+                .sort({ createdAt: -1 });
+            return res.json(apps);
+        }
+
+        // Get paginated results
+        const [apps, total] = await Promise.all([
+            App.find(query)
+                .populate('createdBy', 'name email')
+                .sort({ createdAt: -1 })
+                .skip((page - 1) * limit)
+                .limit(parseInt(limit)),
+            App.countDocuments(query)
+        ]);
+
+        res.json({
+            success: true,
+            data: {
+                apps,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / limit)
+                }
+            }
+        });
 
   } catch (error) {
     logger.error('Error fetching apps:', error);
@@ -161,7 +120,15 @@ router.post('/', [
   body('description').optional().isString().isLength({ max: 500 }),
   body('category').isString(),
   body('packageName').optional().isString(),
-  body('url').isURL()
+  body('url').optional().custom((value) => {
+    if (!value || value.trim() === '') return true;
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      throw new Error('Invalid URL format');
+    }
+  })
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -176,9 +143,18 @@ router.post('/', [
     const { name, description, category, packageName, url, version } = req.body;
     const iconPath = req.file ? `/uploads/app-icons/${req.file.filename}` : null;
 
-    // Mock app creation - in full implementation, this would save to database
-    const app = {
-      id: `app-${Date.now()}`,
+    // Check if packageName already exists
+    if (packageName) {
+      const existingApp = await App.findByPackageName(packageName);
+      if (existingApp) {
+        return res.status(409).json({
+          success: false,
+          message: 'An app with this package name already exists'
+        });
+      }
+    }
+
+    const app = new App({
       name,
       description,
       category,
@@ -186,12 +162,10 @@ router.post('/', [
       url,
       version: version || '1.0.0',
       icon: iconPath,
-      isActive: true,
-      assignedDevices: 0,
-      createdBy: req.user.id,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+      createdBy: req.user.id
+    });
+
+    await app.save();
 
     logger.info('App created successfully', {
       userId: req.user.id,
@@ -245,35 +219,77 @@ router.post('/assign', [
       });
     }
 
-    // Mock assignment - in full implementation, this would update device configurations
-    const assignments = [];
-
-    if (deviceIds) {
-      deviceIds.forEach(deviceId => {
-        appIds.forEach((appId, index) => {
-          assignments.push({
-            type: 'device',
-            targetId: deviceId,
-            appId,
-            position: position !== undefined ? position + index : index,
-            assignedAt: new Date().toISOString()
-          });
-        });
+    // Verify all apps exist
+    const apps = await App.find({ _id: { $in: appIds } });
+    if (apps.length !== appIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some apps were not found'
       });
     }
 
-    if (roomNumbers) {
-      roomNumbers.forEach(roomNumber => {
-        appIds.forEach((appId, index) => {
-          assignments.push({
-            type: 'room',
-            targetId: roomNumber,
-            appId,
-            position: position !== undefined ? position + index : index,
-            assignedAt: new Date().toISOString()
-          });
+    const Device = require('../models/Device');
+    const assignments = [];
+
+    if (deviceIds) {
+      // Find devices and verify they exist
+      const devices = await Device.find({ _id: { $in: deviceIds } });
+      if (devices.length !== deviceIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'Some devices were not found'
         });
-      });
+      }
+
+      // Update each device's app layout
+      for (const device of devices) {
+        device.configuration = device.configuration || {};
+        device.configuration.appLayout = appIds.map((appId, index) => ({
+          appId,
+          position: position !== undefined ? position + index : index,
+          isVisible: true
+        }));
+        await device.save();
+
+        assignments.push({
+          type: 'device',
+          targetId: device.id,
+          appIds,
+          assignedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    if (roomNumbers) {
+      // Find devices by room numbers
+      const devices = await Device.find({ roomNumber: { $in: roomNumbers } });
+      const foundRooms = devices.map(d => d.roomNumber);
+      const missingRooms = roomNumbers.filter(r => !foundRooms.includes(r));
+      
+      if (missingRooms.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `No devices found for rooms: ${missingRooms.join(', ')}`
+        });
+      }
+
+      // Update each device's app layout
+      for (const device of devices) {
+        device.configuration = device.configuration || {};
+        device.configuration.appLayout = appIds.map((appId, index) => ({
+          appId,
+          position: position !== undefined ? position + index : index,
+          isVisible: true
+        }));
+        await device.save();
+
+        assignments.push({
+          type: 'room',
+          targetId: device.roomNumber,
+          appIds,
+          assignedAt: new Date().toISOString()
+        });
+      }
     }
 
     // Emit real-time event
@@ -336,22 +352,46 @@ router.post('/bulk-assign', [
       });
     }
 
-    const { apps, devices } = req.body;
+    const { apps: appIds, devices: deviceIds } = req.body;
 
-    // Mock assignment - in full implementation, this would update device configurations
+    // Verify all apps exist
+    const apps = await App.find({ _id: { $in: appIds } });
+    if (apps.length !== appIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some apps were not found'
+      });
+    }
+
+    // Find devices and verify they exist
+    const Device = require('../models/Device');
+    const devices = await Device.find({ _id: { $in: deviceIds } });
+    if (devices.length !== deviceIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some devices were not found'
+      });
+    }
+
     const assignments = [];
 
-    devices.forEach(deviceId => {
-      apps.forEach((appId, index) => {
-        assignments.push({
-          type: 'device',
-          targetId: deviceId,
-          appId,
-          position: index,
-          assignedAt: new Date().toISOString()
-        });
+    // Update each device's app layout
+    for (const device of devices) {
+      device.configuration = device.configuration || {};
+      device.configuration.appLayout = appIds.map((appId, index) => ({
+        appId,
+        position: index,
+        isVisible: true
+      }));
+      await device.save();
+
+      assignments.push({
+        type: 'device',
+        targetId: device.id,
+        appIds,
+        assignedAt: new Date().toISOString()
       });
-    });
+    }
 
     // Emit real-time event
     if (global.io) {
@@ -412,13 +452,27 @@ router.post('/:appId/install', [
     const { appId } = req.params;
     const { deviceIds } = req.body;
 
-    // Mock app data - in full implementation, this would fetch from database
-    const app = {
-      id: appId,
-      name: 'Mock App',
-      url: 'https://play.google.com/store/apps/details?id=com.example.app',
-      icon: '/uploads/app-icons/app.png'
-    };
+    const app = await App.findById(appId);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Verify devices exist and are approved
+    const Device = require('../models/Device');
+    const devices = await Device.find({
+      _id: { $in: deviceIds },
+      status: 'approved'
+    });
+
+    if (devices.length !== deviceIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some devices were not found or are not approved'
+      });
+    }
 
     const installRequests = [];
 
@@ -480,15 +534,17 @@ router.get('/categories', [
   requireAdmin
 ], async (req, res) => {
   try {
-    // Mock categories - in full implementation, this could be configurable
-    const categories = [
-      { id: 'entertainment', name: 'Entertainment', appCount: 5 },
-      { id: 'utility', name: 'Utilities', appCount: 3 },
-      { id: 'communication', name: 'Communication', appCount: 2 },
-      { id: 'productivity', name: 'Productivity', appCount: 1 },
-      { id: 'games', name: 'Games', appCount: 4 },
-      { id: 'lifestyle', name: 'Lifestyle', appCount: 2 }
-    ];
+    // Get categories with app counts
+    const categoryCounts = await App.aggregate([
+      { $group: { _id: '$category', count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]);
+
+    const categories = categoryCounts.map(cat => ({
+      id: cat._id,
+      name: cat._id.charAt(0).toUpperCase() + cat._id.slice(1), // Capitalize first letter
+      appCount: cat.count
+    }));
 
     res.json({
       success: true,
@@ -510,15 +566,42 @@ router.get('/stats/overview', [
   requireAdmin
 ], async (req, res) => {
   try {
-    // Mock statistics - in full implementation, this would query the database
+    const Device = require('../models/Device');
+
+    // Get app statistics
+    const [
+      totalApps,
+      activeApps,
+      devices,
+      mostAssignedApp
+    ] = await Promise.all([
+      App.countDocuments(),
+      App.countDocuments({ isActive: true }),
+      Device.find({ 'configuration.appLayout': { $exists: true } }),
+      Device.aggregate([
+        { $unwind: '$configuration.appLayout' },
+        { $group: { _id: '$configuration.appLayout.appId', count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 1 },
+        { $lookup: { from: 'apps', localField: '_id', foreignField: '_id', as: 'app' } }
+      ])
+    ]);
+
+    // Calculate total assignments and average apps per device
+    const totalAssignments = devices.reduce((sum, device) => 
+      sum + (device.configuration?.appLayout?.length || 0), 0);
+    
+    const averageAppsPerDevice = devices.length > 0 
+      ? (totalAssignments / devices.length).toFixed(1)
+      : 0;
+
     const stats = {
-      totalApps: 17,
-      activeApps: 15,
-      totalAssignments: 45,
-      averageAppsPerDevice: 3.2,
-      mostPopularApp: 'Netflix',
-      recentInstalls: 8,
-      installSuccessRate: '94.2%'
+      totalApps,
+      activeApps,
+      totalAssignments,
+      averageAppsPerDevice,
+      mostPopularApp: mostAssignedApp[0]?.app[0]?.name || 'None',
+      deviceCount: devices.length
     };
 
     res.json({
@@ -544,7 +627,15 @@ router.put('/:appId', [
   body('name').optional().isString().isLength({ min: 1, max: 100 }),
   body('description').optional().isString().isLength({ max: 500 }),
   body('category').optional().isString(),
-  body('url').optional().isURL(),
+  body('url').optional().custom((value) => {
+    if (!value || value.trim() === '') return true;
+    try {
+      new URL(value);
+      return true;
+    } catch {
+      throw new Error('Invalid URL format');
+    }
+  }),
   body('isActive').optional().isBoolean()
 ], async (req, res) => {
   try {
@@ -564,12 +655,27 @@ router.put('/:appId', [
       updates.icon = `/uploads/app-icons/${req.file.filename}`;
     }
 
-    // Mock update - in full implementation, this would update database
-    const updatedApp = {
-      id: appId,
-      ...updates,
-      updatedAt: new Date().toISOString()
-    };
+    const app = await App.findById(appId);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Check packageName uniqueness if being updated
+    if (updates.packageName && updates.packageName !== app.packageName) {
+      const existingApp = await App.findByPackageName(updates.packageName);
+      if (existingApp) {
+        return res.status(409).json({
+          success: false,
+          message: 'An app with this package name already exists'
+        });
+      }
+    }
+
+    Object.assign(app, updates);
+    await app.save();
 
     logger.info('App updated successfully', {
       userId: req.user.id,
@@ -580,7 +686,7 @@ router.put('/:appId', [
     res.json({
       success: true,
       message: 'App updated successfully',
-      data: { app: updatedApp }
+      data: { app }
     });
 
   } catch (error) {
@@ -598,33 +704,25 @@ router.get('/device-assignments', [
   requireAdmin
 ], async (req, res) => {
   try {
-    // Mock device assignments - in full implementation, this would query the database
-    const assignments = [
-      {
-        deviceId: 'device-001',
-        roomNumber: 'Room-101',
-        apps: [
-          { app_id: '1', name: 'Netflix', order: 0 },
-          { app_id: '2', name: 'YouTube', order: 1 }
-        ]
-      },
-      {
-        deviceId: 'device-002', 
-        roomNumber: 'Room-102',
-        apps: [
-          { app_id: '1', name: 'Netflix', order: 0 },
-          { app_id: '3', name: 'Hotel Services', order: 1 }
-        ]
-      }
-    ];
+    const Device = require('../models/Device');
+    const devices = await Device.find({
+      status: 'approved'
+    }).populate('configuration.appLayout.appId', 'name');
 
-    // Transform to the format expected by frontend: { deviceId: [apps], deviceId2: [apps] }
+    // Transform to the format expected by frontend
     const deviceApps = {};
-    assignments.forEach(assignment => {
-      deviceApps[assignment.deviceId] = assignment.apps;
+    devices.forEach(device => {
+      if (device.configuration && device.configuration.appLayout) {
+        deviceApps[device.id] = device.configuration.appLayout.map(app => ({
+          app_id: app.appId._id,
+          name: app.appId.name,
+          order: app.position
+        }));
+      } else {
+        deviceApps[device.id] = [];
+      }
     });
 
-    // Return the transformed object directly (frontend expects this format)
     res.json(deviceApps);
 
   } catch (error) {
@@ -658,11 +756,39 @@ router.post('/reorder/:deviceId', [
     const { deviceId } = req.params;
     const { apps } = req.body;
 
-    // Mock reorder operation - in full implementation, this would update database
-    const updatedAssignments = apps.map((app, index) => ({
-      deviceId,
+    const Device = require('../models/Device');
+    const device = await Device.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found'
+      });
+    }
+
+    // Verify all apps exist
+    const appIds = apps.map(app => app.app_id);
+    const existingApps = await App.find({ _id: { $in: appIds } });
+    if (existingApps.length !== appIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Some apps were not found'
+      });
+    }
+
+    // Update app layout
+    device.configuration = device.configuration || {};
+    device.configuration.appLayout = apps.map((app, index) => ({
       appId: app.app_id,
-      order: app.order || index,
+      position: app.order || index,
+      isVisible: true
+    }));
+
+    await device.save();
+
+    const updatedAssignments = device.configuration.appLayout.map(app => ({
+      deviceId,
+      appId: app.appId,
+      order: app.position,
       updatedAt: new Date().toISOString()
     }));
 
@@ -713,10 +839,28 @@ router.delete('/:appId', [
   try {
     const { appId } = req.params;
 
-    // Mock deletion - in full implementation, this would delete from database
+    const app = await App.findById(appId);
+    if (!app) {
+      return res.status(404).json({
+        success: false,
+        message: 'App not found'
+      });
+    }
+
+    // Remove app from all devices that have it assigned
+    const Device = require('../models/Device');
+    await Device.updateMany(
+      { 'configuration.appLayout.appId': appId },
+      { $pull: { 'configuration.appLayout': { appId: appId } } }
+    );
+
+    // Delete the app
+    await app.deleteOne();
+
     logger.info('App deleted successfully', {
       userId: req.user.id,
-      appId
+      appId,
+      appName: app.name
     });
 
     res.json({

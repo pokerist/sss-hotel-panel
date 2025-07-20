@@ -151,7 +151,7 @@ const BackgroundsPage = () => {
     const formData = new FormData();
     
     acceptedFiles.forEach((file) => {
-      formData.append('backgrounds', file);
+      formData.append('background', file);
     });
 
     try {
@@ -993,8 +993,9 @@ const AssignmentDialog = ({ open, bundle, devices, onClose, onAssign, onSnackbar
 
     try {
       setSubmitting(true);
-      await axios.post(`/api/backgrounds/bundles/${bundle.id}/assign`, {
-        devices: selectedDevices
+      await axios.post('/api/backgrounds/assign', {
+        bundleId: bundle.id,
+        deviceIds: selectedDevices
       }, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });

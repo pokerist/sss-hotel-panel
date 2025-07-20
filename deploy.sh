@@ -641,52 +641,11 @@ initialize_database() {
     # Wait for application to start
     sleep 10
     
-    # Create initialization script (MongoDB only)
-    cat > initialize.js << 'EOF'
-const mongoose = require('mongoose');
-require('dotenv').config();
-
-const User = require('./src/models/User');
-const Settings = require('./src/models/Settings');
-const database = require('./src/config/database');
-
-async function initialize() {
-    try {
-        console.log('Connecting to MongoDB database...');
-        await database.connect();
-        
-        console.log('Initializing default settings...');
-        await Settings.initializeDefaultSettings();
-        
-        console.log('Creating super admin user...');
-        const superAdmin = await User.createUser({
-            email: process.env.SUPER_ADMIN_EMAIL,
-            password: process.env.SUPER_ADMIN_PASSWORD,
-            name: 'Super Administrator',
-            role: 'super_admin'
-        });
-        
-        console.log('Super admin created successfully:', superAdmin.email);
-        console.log('MongoDB initialization completed!');
-        
-        await database.disconnect();
-        process.exit(0);
-    } catch (error) {
-        console.error('Initialization failed:', error);
-        console.error('Error details:', error.message);
-        await database.disconnect();
-        process.exit(1);
-    }
-}
-
-initialize();
-EOF
+    # Copy initialization script
+    cp initialize.js .
     
     # Run initialization
     node initialize.js
-    
-    # Clean up
-    rm initialize.js
     
     log "Database initialized successfully!"
 }

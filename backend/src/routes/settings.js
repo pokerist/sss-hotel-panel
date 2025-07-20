@@ -1,4 +1,6 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
 const { body, query, validationResult } = require('express-validator');
 const Settings = require('../models/Settings');
 const User = require('../models/User');
@@ -7,26 +9,50 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
+// Configure multer for logo uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'public/uploads/branding/');
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'logo-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
+  const fileExtension = path.extname(file.originalname).toLowerCase().substring(1);
+  
+  if (allowedTypes.includes(fileExtension)) {
+    cb(null, true);
+  } else {
+    cb(new Error(`File type .${fileExtension} is not allowed. Allowed types: ${allowedTypes.join(', ')}`), false);
+  }
+};
+
+const upload = multer({
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB max file size for logos
+  }
+});
+
 // Get all editable settings (Admin access)
 router.get('/', [
   authenticateToken,
   requireAdmin
 ], async (req, res) => {
-  try {
-    // Mock settings data to avoid database dependency issues
-    const mockSettings = {
-      'panel_name': 'IPTV Hotel Control Panel',
-      'pms_base_url': '',
-      'pms_polling_interval': 15,
-      'auto_sync': true,
-      'welcome_messages_enabled': true,
-      'farewell_messages_enabled': true,
-      'log_retention_days': 30,
-      'max_device_heartbeat_minutes': 5,
-      'auto_approve_devices': false
-    };
+    try {
+        const settings = await Settings.getAllEditable();
+        const settingsObject = {};
+        
+        settings.forEach(setting => {
+            settingsObject[setting.key] = setting.value;
+        });
 
-    res.json(mockSettings);
+        res.json(settingsObject);
 
   } catch (error) {
     logger.error('Error fetching settings:', error);
@@ -643,6 +669,58 @@ router.post('/backup/restore', [
   }
 });
 
+// Upload logo endpoint
+router.post('/upload-logo', [
+  authenticateToken,
+  requireAdmin,
+  logActivity('UPLOAD_LOGO'),
+  upload.single('logo')
+], async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    const logoPath = `/uploads/branding/${req.file.filename}`;
+    
+    // Update the panel_logo setting
+    await Settings.set('panel_logo', logoPath, req.user.id);
+
+    // Emit real-time event
+    if (global.io) {
+      global.io.to('admin:settings').emit('setting:updated', {
+        key: 'panel_logo',
+        value: logoPath,
+        updatedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info('Panel logo uploaded', {
+      userId: req.user.id,
+      filename: req.file.filename,
+      originalName: req.file.originalname,
+      size: req.file.size
+    });
+
+    res.json({
+      success: true,
+      message: 'Logo uploaded successfully',
+      logo_url: logoPath
+    });
+
+  } catch (error) {
+    logger.error('Error uploading logo:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to upload logo'
+    });
+  }
+});
+
 // Get system health settings
 router.get('/system/health', [
   authenticateToken,
@@ -684,42 +762,9 @@ router.get('/users', [
   authenticateToken,
   requireAdmin
 ], async (req, res) => {
-  try {
-    // Mock users data to avoid database dependency issues
-    const mockUsers = [
-      {
-        id: 'user-001',
-        email: 'ahmedaimnwasfy@gmail.com',
-        name: 'Ahmed Wasfy',
-        role: 'super_admin',
-        permissions: {
-          canDeleteDevices: true,
-          canManageAdmins: true,
-          canChangeBranding: true,
-          canConfigurePMS: true
-        },
-        isActive: true,
-        lastLogin: new Date().toISOString(),
-        createdAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        id: 'user-002',
-        email: 'admin@hotel.com',
-        name: 'Hotel Admin',
-        role: 'admin',
-        permissions: {
-          canDeleteDevices: false,
-          canManageAdmins: false,
-          canChangeBranding: false,
-          canConfigurePMS: false
-        },
-        isActive: true,
-        lastLogin: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-        createdAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ];
-
-    res.json(mockUsers);
+    try {
+        const users = await User.find({}, '-password -refreshTokens');
+        res.json(users);
 
   } catch (error) {
     logger.error('Error fetching users:', error);

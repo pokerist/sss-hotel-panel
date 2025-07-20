@@ -571,7 +571,7 @@ const DeviceApprovalDialog = ({ open, device, onClose, onApprove, onSnackbar }) 
     try {
       setSubmitting(true);
       await axios.post(`/api/devices/${device.id}/approve`, {
-        room_number: roomNumber.trim()
+        roomNumber: roomNumber.trim()
       }, {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
@@ -637,7 +637,7 @@ const DeviceApprovalDialog = ({ open, device, onClose, onApprove, onSnackbar }) 
 // Device Edit Dialog Component
 const DeviceEditDialog = ({ open, device, onClose, onSave, onSnackbar }) => {
   const [formData, setFormData] = useState({
-    room_number: '',
+    roomNumber: '',
     status: '',
     notes: ''
   });
@@ -646,7 +646,7 @@ const DeviceEditDialog = ({ open, device, onClose, onSave, onSnackbar }) => {
   useEffect(() => {
     if (device) {
       setFormData({
-        room_number: device.room_number || '',
+        roomNumber: device.roomNumber || '',
         status: device.status || '',
         notes: device.notes || ''
       });
@@ -680,8 +680,8 @@ const DeviceEditDialog = ({ open, device, onClose, onSave, onSnackbar }) => {
           type="text"
           fullWidth
           variant="outlined"
-          value={formData.room_number}
-          onChange={(e) => setFormData({ ...formData, room_number: e.target.value })}
+          value={formData.roomNumber}
+          onChange={(e) => setFormData({ ...formData, roomNumber: e.target.value })}
         />
         <FormControl fullWidth margin="dense">
           <InputLabel>Status</InputLabel>
