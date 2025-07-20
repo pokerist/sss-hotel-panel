@@ -172,15 +172,59 @@ for BUILD_DIR in "${BUILD_DIRS[@]}"; do
     fi
 done
 
-# Vacuum MongoDB to reclaim space
-log "Vacuuming MongoDB..."
+# Clean MongoDB database completely
+log "Cleaning MongoDB database..."
 if command -v mongosh >/dev/null 2>&1; then
+    # First, try to drop all collections to ensure clean state
+    run_with_error_handling "mongosh iptv_hotel --eval '
+        try {
+            // Drop all collections
+            const collections = db.listCollectionNames();
+            collections.forEach(function(collection) {
+                print(\"Dropping collection: \" + collection);
+                db[collection].drop();
+            });
+            
+            // Also drop the database entirely for a clean slate
+            print(\"Dropping database: iptv_hotel\");
+            db.dropDatabase();
+            
+            print(\"MongoDB database cleanup completed\");
+        } catch(e) {
+            print(\"MongoDB cleanup failed: \" + e.message);
+        }
+    ' 2>/dev/null" "MongoDB database cleanup"
+    
+    # Alternative cleanup method if the above fails
+    if [ $? -ne 0 ]; then
+        log "Trying alternative MongoDB cleanup method..."
+        run_with_error_handling "mongosh iptv_hotel --eval '
+            try {
+                // Try to drop specific collections one by one
+                [\"users\", \"apps\", \"backgrounds\", \"devices\", \"logs\", \"settings\", \"backgroundbundles\"].forEach(function(collection) {
+                    try {
+                        print(\"Dropping collection: \" + collection);
+                        db[collection].drop();
+                    } catch(e) {
+                        print(\"Failed to drop \" + collection + \": \" + e.message);
+                    }
+                });
+                print(\"Alternative MongoDB cleanup completed\");
+            } catch(e) {
+                print(\"Alternative MongoDB cleanup failed: \" + e.message);
+            }
+        ' 2>/dev/null" "Alternative MongoDB cleanup"
+    fi
+    
+    # Final compaction if database still exists
     run_with_error_handling "mongosh iptv_hotel --eval '
         try {
             db.runCommand({ compact: \"apps\" });
             db.runCommand({ compact: \"backgrounds\" });
             db.runCommand({ compact: \"devices\" });
             db.runCommand({ compact: \"logs\" });
+            db.runCommand({ compact: \"users\" });
+            db.runCommand({ compact: \"settings\" });
             print(\"MongoDB compaction completed\");
         } catch(e) {
             print(\"MongoDB compaction failed: \" + e.message);
@@ -190,8 +234,8 @@ else
     log "mongosh not found, skipping database cleanup"
 fi
 
-# Final cleanup - remove any PM2 processes that might be stuck
-log "Cleaning PM2 processes..."
+# Clean any running processes that might interfere
+log "Cleaning running processes..."
 if command -v pm2 >/dev/null 2>&1; then
     run_with_error_handling "pm2 delete all 2>/dev/null" "Stop all PM2 processes"
     run_with_error_handling "pm2 flush 2>/dev/null" "Flush PM2 logs"
@@ -200,4 +244,41 @@ else
     log "PM2 not found, skipping PM2 cleanup"
 fi
 
-log "Cleanup completed - all steps attempted regardless of individual failures"
+# Kill any node processes that might be running
+log "Stopping any remaining Node.js processes..."
+run_with_error_handling "pkill -f 'node.*iptv-hotel' 2>/dev/null" "Kill Node.js processes"
+run_with_error_handling "pkill -f 'npm.*start' 2>/dev/null" "Kill npm processes"
+
+# Remove any socket files or locks
+log "Cleaning socket files and locks..."
+run_with_error_handling "find /tmp -name '*iptv*' -type f -delete 2>/dev/null" "Remove temp files"
+run_with_error_handling "find /var/run -name '*iptv*' -type f -delete 2>/dev/null" "Remove run files"
+
+# Final verification - check if database is really clean
+log "Verifying database cleanup..."
+if command -v mongosh >/dev/null 2>&1; then
+    COLLECTION_COUNT=$(mongosh iptv_hotel --quiet --eval "
+        try {
+            print(db.listCollectionNames().length);
+        } catch(e) {
+            print('0');
+        }
+    " 2>/dev/null)
+    
+    if [ "$COLLECTION_COUNT" = "0" ] || [ -z "$COLLECTION_COUNT" ]; then
+        log "SUCCESS: Database is clean (no collections found)"
+    else
+        log "WARNING: Database still contains $COLLECTION_COUNT collections"
+        # Try one more aggressive cleanup
+        mongosh iptv_hotel --eval "
+            try {
+                db.dropDatabase();
+                print('Force dropped database');
+            } catch(e) {
+                print('Failed to force drop database: ' + e.message);
+            }
+        " 2>/dev/null
+    fi
+fi
+
+log "Cleanup completed - system is now ready for fresh deployment"
