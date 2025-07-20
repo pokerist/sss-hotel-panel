@@ -71,7 +71,8 @@ export const AuthProvider = ({ children }) => {
       // Verify token and get user info
       fetchUserProfile();
     } else {
-      dispatch({ type: 'AUTH_ERROR', payload: 'No token found' });
+      // No token found is normal for first visit - don't show error
+      dispatch({ type: 'AUTH_LOGOUT' });
     }
   }, []);
 
