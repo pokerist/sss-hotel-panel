@@ -7,14 +7,11 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "jest",
-    "lint": "eslint src/",
-    "mock-pms": "node src/mock-pms/server.js"
+    "lint": "eslint src/"
   },
   "dependencies": {
     "express": "^4.18.2",
     "mongoose": "^7.5.0",
-    "pg": "^8.11.3",
-    "sequelize": "^6.32.1",
     "bcryptjs": "^2.4.3",
     "jsonwebtoken": "^9.0.2",
     "socket.io": "^4.7.2",

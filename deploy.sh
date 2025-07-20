@@ -108,26 +108,11 @@ collect_deployment_info() {
     log "PMS Integration Setup..."
     read -p "Opera PMS base URL (leave empty to skip): " PMS_BASE_URL
     
-    # Database choice
+    # Database configuration (MongoDB only)
     echo
     log "Database Configuration..."
-    echo "Choose database type:"
-    echo "1) MongoDB (recommended)"
-    echo "2) PostgreSQL"
-    read -p "Select database [1]: " db_choice
-    db_choice=${db_choice:-1}
-    
-    if [[ "$db_choice" == "2" ]]; then
-        DB_TYPE="postgresql"
-        read -p "PostgreSQL database name [iptv_hotel]: " PG_DATABASE
-        PG_DATABASE=${PG_DATABASE:-"iptv_hotel"}
-        read -p "PostgreSQL username [iptv_user]: " PG_USERNAME
-        PG_USERNAME=${PG_USERNAME:-"iptv_user"}
-        PG_PASSWORD=$(generate_password)
-        info "Generated PostgreSQL password: $PG_PASSWORD"
-    else
-        DB_TYPE="mongodb"
-    fi
+    info "Using MongoDB (simplified architecture)"
+    DB_TYPE="mongodb"
     
     # SSL Configuration
     echo
@@ -639,6 +624,28 @@ EOF
     log "Database initialized successfully!"
 }
 
+# Clone repository function
+clone_repository() {
+    log "Cloning IPTV Hotel Control Panel repository..."
+    
+    # Check if we're already in a git repository
+    if [[ -d ".git" ]]; then
+        log "Already in git repository, pulling latest changes..."
+        git pull origin main
+    else
+        # Clone the repository
+        log "Cloning from GitHub repository..."
+        git clone https://github.com/pokerist/sss-hotel-panel.git .
+        
+        # Verify clone was successful
+        if [[ ! -f "package.json" ]] || [[ ! -d "backend" ]] || [[ ! -d "frontend" ]]; then
+            error "Repository clone failed or incomplete. Please check your internet connection and try again."
+        fi
+        
+        log "Repository cloned successfully!"
+    fi
+}
+
 # Main deployment function
 deploy() {
     log "Starting IPTV Hotel Control Panel deployment..."
@@ -647,6 +654,13 @@ deploy() {
     if ! command -v curl &> /dev/null; then
         sudo apt update && sudo apt install -y curl
     fi
+    
+    if ! command -v git &> /dev/null; then
+        sudo apt update && sudo apt install -y git
+    fi
+    
+    # Clone/update repository
+    clone_repository
     
     # Collect configuration
     collect_deployment_info

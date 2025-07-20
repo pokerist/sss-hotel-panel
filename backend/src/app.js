@@ -44,8 +44,6 @@ const ConfigWatcher = require('./services/configWatcher');
 const DeviceManager = require('./services/deviceManager');
 const GuestAutomation = require('./services/guestAutomation');
 
-// Import mock PMS server
-const startMockPMS = require('./mock-pms/server');
 
 const app = express();
 // Create separate HTTP and WebSocket servers
@@ -170,10 +168,9 @@ async function initializeServices() {
     await database.connect();
     logger.info('Database connected successfully');
 
-    // Start mock PMS if enabled
+    // Note: Mock PMS now runs as a standalone service on port 3001
     if (process.env.USE_MOCK_PMS === 'true') {
-      startMockPMS();
-      logger.info('Mock PMS server started');
+      logger.info('Mock PMS mode enabled - ensure mock PMS service is running on port 3001');
     }
 
     // Initialize services
