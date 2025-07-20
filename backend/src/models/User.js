@@ -149,6 +149,11 @@ const postgresSchema = {
   }
 };
 
+// Helper function to check if a string is already a bcrypt hash
+const isBcryptHash = (str) => {
+  return /^\$2[abxy]?\$\d+\$/.test(str);
+};
+
 // Common methods for both database types
 const commonMethods = {
   async comparePassword(candidatePassword) {
@@ -156,8 +161,18 @@ const commonMethods = {
   },
 
   async setPassword(password) {
+    // Don't hash if password is already a bcrypt hash
+    if (isBcryptHash(password)) {
+      this.password = password;
+      // Set flag to prevent double-hashing in hooks
+      this._passwordAlreadyHashed = true;
+      return;
+    }
+    
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(password, salt);
+    // Set flag to prevent double-hashing in hooks
+    this._passwordAlreadyHashed = true;
   },
 
   addRefreshToken(token) {
@@ -256,6 +271,13 @@ if (dbType === 'mongodb') {
   mongoSchema.pre('save', async function(next) {
     if (!this.isModified('password')) return next();
     
+    // Skip hashing if password was already hashed manually or is already a bcrypt hash
+    if (this._passwordAlreadyHashed || isBcryptHash(this.password)) {
+      // Reset the flag for next time
+      this._passwordAlreadyHashed = false;
+      return next();
+    }
+    
     const salt = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
     next();
@@ -270,6 +292,12 @@ if (dbType === 'mongodb') {
     hooks: {
       beforeSave: async (user) => {
         if (user.changed('password')) {
+          // Skip hashing if password was already hashed manually or is already a bcrypt hash
+          if (user._passwordAlreadyHashed || isBcryptHash(user.password)) {
+            // Reset the flag for next time
+            user._passwordAlreadyHashed = false;
+            return;
+          }
           await user.setPassword(user.password);
         }
       }
