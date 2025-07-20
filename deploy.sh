@@ -419,7 +419,8 @@ EOF
     
     # Install frontend dependencies and build
     npm install
-    npm run build
+    # Build with increased memory to avoid "heap out of memory" errors on low-RAM servers
+    NODE_OPTIONS="--max-old-space-size=4096" npm run build
     
     # Create necessary directories
     sudo mkdir -p $APP_DIR/backend/public/uploads/backgrounds
