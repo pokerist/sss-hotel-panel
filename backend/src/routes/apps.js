@@ -120,6 +120,11 @@ router.get('/', [
       );
     }
 
+    // For frontend compatibility - return just the array if no pagination params
+    if (!req.query.page && !req.query.limit) {
+      return res.json(filteredApps);
+    }
+
     // Pagination
     const startIndex = (page - 1) * limit;
     const paginatedApps = filteredApps.slice(startIndex, startIndex + parseInt(limit));
@@ -306,6 +311,80 @@ router.post('/assign', [
 
   } catch (error) {
     logger.error('Error assigning apps:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to assign apps'
+    });
+  }
+});
+
+// Bulk assign apps (frontend compatibility)
+router.post('/bulk-assign', [
+  authenticateToken,
+  requireAdmin,
+  logActivity('BULK_ASSIGN_APPS'),
+  body('apps').isArray().notEmpty(),
+  body('devices').isArray().notEmpty()
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { apps, devices } = req.body;
+
+    // Mock assignment - in full implementation, this would update device configurations
+    const assignments = [];
+
+    devices.forEach(deviceId => {
+      apps.forEach((appId, index) => {
+        assignments.push({
+          type: 'device',
+          targetId: deviceId,
+          appId,
+          position: index,
+          assignedAt: new Date().toISOString()
+        });
+      });
+    });
+
+    // Emit real-time event
+    if (global.io) {
+      global.io.to('admin:apps').emit('app:assignments-updated', {
+        assignments,
+        assignedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+
+      // Notify affected devices
+      devices.forEach(deviceId => {
+        global.io.emit(`device:${deviceId}`, {
+          type: 'APPS_ASSIGNED',
+          appIds: apps,
+          timestamp: new Date().toISOString()
+        });
+      });
+    }
+
+    logger.info('Apps bulk assigned successfully', {
+      userId: req.user.id,
+      appCount: apps.length,
+      deviceCount: devices.length
+    });
+
+    res.json({
+      success: true,
+      message: 'Apps assigned successfully',
+      data: { assignments }
+    });
+
+  } catch (error) {
+    logger.error('Error bulk assigning apps:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to assign apps'
@@ -525,30 +604,102 @@ router.get('/device-assignments', [
         deviceId: 'device-001',
         roomNumber: 'Room-101',
         apps: [
-          { appId: '1', name: 'Netflix', position: 0 },
-          { appId: '2', name: 'YouTube', position: 1 }
+          { app_id: '1', name: 'Netflix', order: 0 },
+          { app_id: '2', name: 'YouTube', order: 1 }
         ]
       },
       {
         deviceId: 'device-002', 
         roomNumber: 'Room-102',
         apps: [
-          { appId: '1', name: 'Netflix', position: 0 },
-          { appId: '3', name: 'Hotel Services', position: 1 }
+          { app_id: '1', name: 'Netflix', order: 0 },
+          { app_id: '3', name: 'Hotel Services', order: 1 }
         ]
       }
     ];
 
-    res.json({
-      success: true,
-      data: assignments
+    // Transform to the format expected by frontend: { deviceId: [apps], deviceId2: [apps] }
+    const deviceApps = {};
+    assignments.forEach(assignment => {
+      deviceApps[assignment.deviceId] = assignment.apps;
     });
+
+    // Return the transformed object directly (frontend expects this format)
+    res.json(deviceApps);
 
   } catch (error) {
     logger.error('Error fetching device assignments:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch device assignments'
+    });
+  }
+});
+
+// Reorder apps for a device
+router.post('/reorder/:deviceId', [
+  authenticateToken,
+  requireAdmin,
+  logActivity('REORDER_APPS'),
+  body('apps').isArray().notEmpty(),
+  body('apps.*.app_id').isString(),
+  body('apps.*.order').isInt({ min: 0 })
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: errors.array()
+      });
+    }
+
+    const { deviceId } = req.params;
+    const { apps } = req.body;
+
+    // Mock reorder operation - in full implementation, this would update database
+    const updatedAssignments = apps.map((app, index) => ({
+      deviceId,
+      appId: app.app_id,
+      order: app.order || index,
+      updatedAt: new Date().toISOString()
+    }));
+
+    // Emit real-time event
+    if (global.io) {
+      global.io.to('admin:apps').emit('app:order-updated', {
+        deviceId,
+        apps: updatedAssignments,
+        updatedBy: req.user.name,
+        timestamp: new Date().toISOString()
+      });
+
+      // Notify the specific device
+      global.io.emit(`device:${deviceId}`, {
+        type: 'APPS_REORDERED',
+        apps: updatedAssignments,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    logger.info('Apps reordered successfully', {
+      userId: req.user.id,
+      deviceId,
+      appCount: apps.length
+    });
+
+    res.json({
+      success: true,
+      message: 'App order updated successfully',
+      data: { assignments: updatedAssignments }
+    });
+
+  } catch (error) {
+    logger.error('Error reordering apps:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reorder apps'
     });
   }
 });

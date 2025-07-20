@@ -63,8 +63,12 @@ const io = new Server(server, {
   allowEIO3: true
 });
 
-// Trust proxy for rate limiting when behind Nginx
-app.set('trust proxy', true);
+// Trust proxy configuration for deployment behind Nginx/load balancer
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1); // Trust first proxy
+} else {
+  app.set('trust proxy', false); // Don't trust proxy in development
+}
 
 // Middleware
 app.use(helmet({
@@ -79,13 +83,25 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Rate limiting
+// Rate limiting with proper trust proxy configuration
 const limiter = rateLimit({
   windowMs: (process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
   max: process.env.RATE_LIMIT_MAX_REQUESTS || 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  // Use a more secure key generator when behind proxy
+  keyGenerator: (req) => {
+    if (process.env.NODE_ENV === 'production') {
+      // In production, use the forwarded IP from trusted proxy
+      return req.ip;
+    } else {
+      // In development, use the connection IP
+      return req.connection.remoteAddress;
+    }
+  },
+  // Skip rate limiting for health checks
+  skip: (req) => req.path === '/health'
 });
 app.use('/api', limiter);
 
