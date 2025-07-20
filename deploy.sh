@@ -319,7 +319,7 @@ EOF
 
     if [[ "$DB_TYPE" == "mongodb" ]]; then
         cat >> backend/.env << EOF
-MONGO_URI="mongodb://localhost:27017/iptv_hotel"
+MONGO_URI="mongodb://127.0.0.1:27017/iptv_hotel"
 EOF
     else
         cat >> backend/.env << EOF

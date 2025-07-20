@@ -15,11 +15,13 @@ const database = {
   },
 
   async connectMongoDB() {
-    const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/iptv_hotel';
+    const mongoUri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/iptv_hotel';
     
     await mongoose.connect(mongoUri, {
       useNewUrlParser: true,
       useUnifiedTopology: true,
+      serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
+      connectTimeoutMS: 10000, // Give up initial connection after 10s
     });
 
     db = mongoose.connection;
