@@ -48,13 +48,19 @@ const GuestAutomation = require('./services/guestAutomation');
 const startMockPMS = require('./mock-pms/server');
 
 const app = express();
+// Create separate HTTP and WebSocket servers
 const server = createServer(app);
+
+// WebSocket server configuration
+const wsPort = process.env.WS_PORT || 4000;
 const io = new Server(server, {
   cors: {
     origin: process.env.CORS_ORIGIN || "http://localhost:3001",
     methods: ["GET", "POST"],
     credentials: true
-  }
+  },
+  transports: ['websocket', 'polling'],
+  allowEIO3: true
 });
 
 // Trust proxy for rate limiting when behind Nginx
@@ -170,13 +176,19 @@ async function initializeServices() {
 const PORT = process.env.PORT || 3000;
 const WS_PORT = process.env.WS_PORT || 4000;
 
+// Start main HTTP server
 server.listen(PORT, async () => {
   logger.info(`IPTV Hotel Panel Backend started on port ${PORT}`);
-  logger.info(`WebSocket server running on port ${WS_PORT}`);
+  logger.info(`WebSocket server running on same port: ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
   await initializeServices();
 });
+
+// In production, WebSocket runs on the same port as HTTP (handled by Nginx)
+if (process.env.NODE_ENV !== 'production') {
+  logger.info(`Development mode: WebSocket available on port ${PORT}`);
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

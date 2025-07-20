@@ -310,6 +310,13 @@ generate_env_file() {
     JWT_SECRET=$(generate_jwt_secret)
     JWT_REFRESH_SECRET=$(generate_jwt_secret)
     
+    # Determine URLs based on SSL setup
+    if [[ "$setup_ssl" =~ ^[Yy] ]] && [[ -n "$DOMAIN_NAME" ]]; then
+        BASE_URL="https://$DOMAIN_NAME"
+    else
+        BASE_URL="http://$SERVER_IP"
+    fi
+    
     # Create backend/.env file
     cat > backend/.env << EOF
 # IPTV Hotel Panel Environment Configuration
@@ -317,9 +324,9 @@ generate_env_file() {
 
 # Panel Configuration
 PANEL_NAME="$PANEL_NAME"
-PANEL_BASE_URL="http://$SERVER_IP"
+PANEL_BASE_URL="$BASE_URL"
 PORT=3000
-FRONTEND_URL="http://$SERVER_IP"
+FRONTEND_URL="$BASE_URL"
 
 # Database Configuration
 DB_TYPE="$DB_TYPE"
@@ -403,8 +410,14 @@ install_application() {
     cd $APP_DIR/backend
     npm install --production
     
-    # Install frontend dependencies and build
+    # Create frontend environment file for build
     cd $APP_DIR/frontend
+    cat > .env.production << EOF
+REACT_APP_SOCKET_URL=$BASE_URL
+REACT_APP_API_URL=$BASE_URL/api
+EOF
+    
+    # Install frontend dependencies and build
     npm install
     npm run build
     
@@ -451,9 +464,9 @@ server {
         proxy_cache_bypass \$http_upgrade;
     }
     
-    # WebSocket for Socket.IO
+    # WebSocket for Socket.IO (same port as backend)
     location /socket.io/ {
-        proxy_pass http://localhost:4000;
+        proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";

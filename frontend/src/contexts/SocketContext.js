@@ -14,11 +14,19 @@ export const SocketProvider = ({ children }) => {
   useEffect(() => {
     if (user) {
       // Initialize socket connection
-      const socketInstance = io(process.env.REACT_APP_SOCKET_URL || window.location.origin, {
+      const socketUrl = process.env.REACT_APP_SOCKET_URL || window.location.origin;
+      console.log('Connecting to Socket.IO server at:', socketUrl);
+      
+      const socketInstance = io(socketUrl, {
         auth: {
           token: localStorage.getItem('token')
         },
-        transports: ['websocket', 'polling']
+        transports: ['websocket', 'polling'],
+        forceNew: true,
+        reconnection: true,
+        timeout: 20000,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000
       });
 
       // Connection events
@@ -27,7 +35,9 @@ export const SocketProvider = ({ children }) => {
         setConnected(true);
         
         // Join admin room for admin-specific notifications
-        socketInstance.emit('join-admin-room');
+        if (user.role === 'admin' || user.role === 'super_admin') {
+          socketInstance.emit('admin:join-room', 'notifications');
+        }
       });
 
       socketInstance.on('disconnect', () => {
@@ -37,7 +47,41 @@ export const SocketProvider = ({ children }) => {
 
       socketInstance.on('connect_error', (error) => {
         console.error('Socket connection error:', error);
+        console.error('Failed to connect to:', socketUrl);
         setConnected(false);
+        enqueueSnackbar(
+          'WebSocket connection failed. Some features may not work properly.',
+          { 
+            variant: 'error',
+            autoHideDuration: 6000
+          }
+        );
+      });
+
+      socketInstance.on('reconnect', (attemptNumber) => {
+        console.log('Socket reconnected after', attemptNumber, 'attempts');
+        enqueueSnackbar(
+          'Connection restored',
+          { 
+            variant: 'success',
+            autoHideDuration: 3000
+          }
+        );
+      });
+
+      socketInstance.on('reconnect_error', (error) => {
+        console.error('Socket reconnection error:', error);
+      });
+
+      socketInstance.on('reconnect_failed', () => {
+        console.error('Socket reconnection failed');
+        enqueueSnackbar(
+          'Failed to reconnect. Please refresh the page.',
+          { 
+            variant: 'error',
+            persist: true
+          }
+        );
       });
 
       // Device events
