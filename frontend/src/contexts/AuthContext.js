@@ -1,11 +1,13 @@
 import React, { createContext, useContext, useReducer, useEffect } from 'react';
 import axios from 'axios';
 
-// API base URL
-const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
+// API base URL - Remove /api from base URL since individual calls include it
+const API_BASE_URL = process.env.REACT_APP_BASE_URL || '';
 
 // Configure axios defaults
-axios.defaults.baseURL = API_BASE_URL;
+if (API_BASE_URL) {
+  axios.defaults.baseURL = API_BASE_URL;
+}
 
 // Auth context
 const AuthContext = createContext();
@@ -80,7 +82,7 @@ export const AuthProvider = ({ children }) => {
   const fetchUserProfile = async () => {
     try {
       dispatch({ type: 'AUTH_START' });
-      const response = await axios.get('/auth/profile');
+      const response = await axios.get('/api/auth/profile');
       dispatch({ type: 'AUTH_SUCCESS', payload: response.data.data.user });
     } catch (error) {
       console.error('Failed to fetch user profile:', error);
@@ -95,7 +97,7 @@ export const AuthProvider = ({ children }) => {
     try {
       dispatch({ type: 'AUTH_START' });
       
-      const response = await axios.post('/auth/login', {
+      const response = await axios.post('/api/auth/login', {
         email,
         password,
       });
@@ -121,7 +123,7 @@ export const AuthProvider = ({ children }) => {
   // Logout function
   const logout = async () => {
     try {
-      await axios.post('/auth/logout');
+      await axios.post('/api/auth/logout');
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
@@ -141,7 +143,7 @@ export const AuthProvider = ({ children }) => {
   // Change password
   const changePassword = async (currentPassword, newPassword) => {
     try {
-      await axios.put('/auth/change-password', {
+      await axios.put('/api/auth/change-password', {
         currentPassword,
         newPassword,
       });
@@ -155,7 +157,7 @@ export const AuthProvider = ({ children }) => {
   // Refresh token
   const refreshToken = async () => {
     try {
-      const response = await axios.post('/auth/refresh');
+      const response = await axios.post('/api/auth/refresh');
       const { accessToken } = response.data.data;
       
       localStorage.setItem('token', accessToken);

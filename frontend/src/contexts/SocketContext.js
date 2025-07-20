@@ -17,9 +17,18 @@ export const SocketProvider = ({ children }) => {
       const socketUrl = process.env.REACT_APP_SOCKET_URL || window.location.origin;
       console.log('Connecting to Socket.IO server at:', socketUrl);
       
+      const token = localStorage.getItem('token');
+      if (!token) {
+        console.warn('No auth token available for socket connection');
+        return;
+      }
+      
       const socketInstance = io(socketUrl, {
         auth: {
-          token: localStorage.getItem('token')
+          token: token
+        },
+        extraHeaders: {
+          'Authorization': `Bearer ${token}`
         },
         transports: ['websocket', 'polling'],
         forceNew: true,
