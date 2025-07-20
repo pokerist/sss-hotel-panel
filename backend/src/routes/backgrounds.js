@@ -72,6 +72,7 @@ router.get('/', [
         dimensions: { width: 1920, height: 1080 },
         duration: null,
         bundleId: 'bundle-1',
+        path: '/uploads/backgrounds/nature-landscape.jpg',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       },
@@ -84,6 +85,20 @@ router.get('/', [
         dimensions: { width: 1920, height: 1080 },
         duration: 30,
         bundleId: 'bundle-1',
+        path: '/uploads/backgrounds/ocean-waves.mp4',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        id: '3',
+        name: 'City Skyline',
+        filename: 'city-skyline.jpg',
+        type: 'image',
+        size: 3145728,
+        dimensions: { width: 1920, height: 1080 },
+        duration: null,
+        bundleId: 'bundle-2',
+        path: '/uploads/backgrounds/city-skyline.jpg',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -98,6 +113,11 @@ router.get('/', [
     // Filter by bundle
     if (bundleId) {
       filteredBackgrounds = filteredBackgrounds.filter(bg => bg.bundleId === bundleId);
+    }
+
+    // For frontend compatibility - return just the array if no pagination params
+    if (!req.query.page && !req.query.limit) {
+      return res.json(filteredBackgrounds);
     }
 
     // Pagination

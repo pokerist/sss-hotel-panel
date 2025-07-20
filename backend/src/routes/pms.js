@@ -523,6 +523,44 @@ router.post('/sync', [
   }
 });
 
+// Get PMS configuration
+router.get('/config', [
+  authenticateToken,
+  requireAdmin
+], async (req, res) => {
+  try {
+    const [pmsBaseUrl, endpoints, pollingInterval, mockPmsEnabled] = await Promise.all([
+      Settings.get('pms_base_url', ''),
+      Settings.get('pms_endpoints', {
+        guests: '/guest/v0/guests',
+        reservations: '/reservation/v0/reservations',
+        folios: '/folio/v0/folios'
+      }),
+      Settings.get('pms_polling_interval', 15),
+      Settings.get('USE_MOCK_PMS', process.env.USE_MOCK_PMS === 'true')
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        baseUrl: pmsBaseUrl,
+        endpoints,
+        pollingInterval,
+        mockMode: mockPmsEnabled,
+        configured: !!(pmsBaseUrl || mockPmsEnabled),
+        lastUpdated: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    logger.error('Error fetching PMS config:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch PMS configuration'
+    });
+  }
+});
+
 // Get sync history/statistics
 router.get('/sync-history', [
   authenticateToken,

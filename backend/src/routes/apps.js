@@ -513,6 +513,46 @@ router.put('/:appId', [
   }
 });
 
+// Get device assignments (for frontend AppsPage)
+router.get('/device-assignments', [
+  authenticateToken,
+  requireAdmin
+], async (req, res) => {
+  try {
+    // Mock device assignments - in full implementation, this would query the database
+    const assignments = [
+      {
+        deviceId: 'device-001',
+        roomNumber: 'Room-101',
+        apps: [
+          { appId: '1', name: 'Netflix', position: 0 },
+          { appId: '2', name: 'YouTube', position: 1 }
+        ]
+      },
+      {
+        deviceId: 'device-002', 
+        roomNumber: 'Room-102',
+        apps: [
+          { appId: '1', name: 'Netflix', position: 0 },
+          { appId: '3', name: 'Hotel Services', position: 1 }
+        ]
+      }
+    ];
+
+    res.json({
+      success: true,
+      data: assignments
+    });
+
+  } catch (error) {
+    logger.error('Error fetching device assignments:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch device assignments'
+    });
+  }
+});
+
 // Delete app
 router.delete('/:appId', [
   authenticateToken,
