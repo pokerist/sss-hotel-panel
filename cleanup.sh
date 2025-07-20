@@ -79,10 +79,37 @@ run_with_error_handling "sudo service mongodb stop 2>/dev/null" "Stop mongodb se
 # Wait for processes to die
 sleep 5
 
-# PHASE 2: COMPLETE MONGODB UNINSTALLATION
+# PHASE 2: MONGODB DATABASE & APPLICATION CLEANUP
 log "========================================="
-log "PHASE 2: MONGODB COMPLETE UNINSTALLATION"
+log "PHASE 2: MONGODB DATABASE & APPLICATION CLEANUP"
 log "========================================="
+
+# Clean specific databases and collections BEFORE removing MongoDB
+if command -v mongosh >/dev/null 2>&1; then
+    log "Cleaning MongoDB databases and collections..."
+    
+    # Clean the IPTV hotel database specifically
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.dropDatabase()' --quiet 2>/dev/null" "Drop iptv_hotel database"
+    
+    # Clean any test databases
+    run_with_error_handling "mongosh iptv_hotel_test --eval 'db.dropDatabase()' --quiet 2>/dev/null" "Drop iptv_hotel_test database"
+    
+    # Remove specific problematic collections if database still exists
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.devices.drop()' --quiet 2>/dev/null" "Drop devices collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.users.drop()' --quiet 2>/dev/null" "Drop users collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.apps.drop()' --quiet 2>/dev/null" "Drop apps collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.backgrounds.drop()' --quiet 2>/dev/null" "Drop backgrounds collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.backgroundbundles.drop()' --quiet 2>/dev/null" "Drop backgroundbundles collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.settings.drop()' --quiet 2>/dev/null" "Drop settings collection"
+    run_with_error_handling "mongosh iptv_hotel --eval 'db.logs.drop()' --quiet 2>/dev/null" "Drop logs collection"
+    
+    # List and remove any orphaned databases
+    run_with_error_handling "mongosh --eval 'db.adminCommand(\"listDatabases\").databases.forEach(function(d) { if(d.name.includes(\"iptv\") || d.name.includes(\"hotel\")) { print(\"Dropping: \" + d.name); db.getSiblingDB(d.name).dropDatabase(); } })' --quiet 2>/dev/null" "Remove orphaned IPTV databases"
+    
+    log "MongoDB database cleanup completed"
+else
+    log "MongoDB shell not available, skipping database cleanup"
+fi
 
 # Update package lists
 log "Updating package lists..."

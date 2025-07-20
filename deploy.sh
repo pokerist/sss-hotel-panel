@@ -632,6 +632,51 @@ EOF
     fi
 }
 
+# Pre-deployment database verification
+verify_database_state() {
+    log "Verifying MongoDB database state..."
+    
+    # Check if MongoDB is running
+    if ! sudo systemctl is-active --quiet mongod; then
+        warn "MongoDB service is not running, attempting to start..."
+        sudo systemctl start mongod
+        sleep 5
+        
+        if ! sudo systemctl is-active --quiet mongod; then
+            error "Failed to start MongoDB service"
+        fi
+    fi
+    
+    # Test MongoDB connection
+    local max_attempts=10
+    local attempt=1
+    
+    while [[ $attempt -le $max_attempts ]]; do
+        if mongosh --eval "db.runCommand('ping').ok" --quiet 2>/dev/null; then
+            log "MongoDB connection verified"
+            break
+        else
+            if [[ $attempt -eq $max_attempts ]]; then
+                error "Failed to connect to MongoDB after $max_attempts attempts"
+            fi
+            warn "MongoDB connection attempt $attempt failed, retrying in 3 seconds..."
+            sleep 3
+            ((attempt++))
+        fi
+    done
+    
+    # Check for problematic existing data
+    log "Checking for existing problematic data..."
+    
+    # Check if iptv_hotel database exists and has problematic records
+    local existing_devices=$(mongosh iptv_hotel --eval "db.devices.countDocuments({macAddress: null})" --quiet 2>/dev/null || echo "0")
+    if [[ "$existing_devices" != "0" && "$existing_devices" =~ ^[0-9]+$ && $existing_devices -gt 0 ]]; then
+        warn "Found $existing_devices devices with null MAC addresses - this will be cleaned during initialization"
+    fi
+    
+    log "Database state verification completed"
+}
+
 # Initialize database
 initialize_database() {
     log "Initializing database and creating super admin..."
@@ -641,10 +686,35 @@ initialize_database() {
     # Wait for application to start
     sleep 10
     
-    # Run initialization
-    node initialize.js
+    # Verify database state before initialization
+    verify_database_state
     
-    log "Database initialized successfully!"
+    # Run initialization with better error handling
+    log "Running database initialization script..."
+    if node initialize.js; then
+        log "Database initialized successfully!"
+    else
+        error_code=$?
+        error "Database initialization failed with exit code: $error_code"
+        
+        # Provide troubleshooting guidance
+        echo
+        warn "Database initialization failed. Troubleshooting steps:"
+        warn "1. Check MongoDB service: sudo systemctl status mongod"
+        warn "2. Review MongoDB logs: sudo tail -f /var/log/mongodb/mongod.log"
+        warn "3. Check application logs: tail -f $APP_DIR/backend/logs/application-*.log"
+        warn "4. Try running cleanup script first: ./cleanup.sh"
+        warn "5. Then retry deployment: ./deploy.sh"
+        echo
+        
+        # Check if this is a duplicate key error
+        if tail -n 50 $APP_DIR/backend/logs/application-*.log 2>/dev/null | grep -q "E11000"; then
+            warn "This appears to be a duplicate key error."
+            warn "Run: ./cleanup.sh && ./deploy.sh"
+        fi
+        
+        exit 1
+    fi
 }
 
 # Clone repository function

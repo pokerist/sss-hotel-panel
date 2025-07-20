@@ -106,7 +106,7 @@ async function createTestBackgroundBundle(superAdmin, backgrounds) {
 
 async function createTestDevices(superAdmin, apps) {
     console.log('Creating test devices...');
-    const devices = [
+    const devicesData = [
         {
             uuid: 'device-001-uuid',
             macAddress: '00:11:22:33:44:55',
@@ -127,6 +127,11 @@ async function createTestDevices(superAdmin, apps) {
                     position: index,
                     isVisible: true
                 }))
+            },
+            statistics: {
+                totalUptime: 0,
+                configPushCount: 0,
+                messagesReceived: 0
             }
         },
         {
@@ -149,11 +154,114 @@ async function createTestDevices(superAdmin, apps) {
                     position: index,
                     isVisible: true
                 }))
+            },
+            statistics: {
+                totalUptime: 0,
+                configPushCount: 0,
+                messagesReceived: 0
             }
         }
     ];
 
-    return await Device.insertMany(devices);
+    const createdDevices = [];
+    
+    // Insert devices one by one with individual error handling
+    for (const deviceData of devicesData) {
+        try {
+            // Use findOneAndUpdate with upsert to avoid duplicate key errors
+            const device = await Device.findOneAndUpdate(
+                { $or: [{ uuid: deviceData.uuid }, { macAddress: deviceData.macAddress }] },
+                deviceData,
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+            );
+            createdDevices.push(device);
+            console.log(`Test device created/updated: ${device.uuid} (${device.macAddress})`);
+        } catch (error) {
+            console.warn(`Warning: Failed to create device ${deviceData.uuid}:`, error.message);
+            // Try to create without upsert as fallback
+            try {
+                const existingDevice = await Device.findOne({
+                    $or: [{ uuid: deviceData.uuid }, { macAddress: deviceData.macAddress }]
+                });
+                if (existingDevice) {
+                    createdDevices.push(existingDevice);
+                    console.log(`Using existing device: ${existingDevice.uuid}`);
+                }
+            } catch (fallbackError) {
+                console.warn(`Could not handle device ${deviceData.uuid}:`, fallbackError.message);
+            }
+        }
+    }
+
+    return createdDevices;
+}
+
+async function cleanupExistingData() {
+    console.log('Cleaning up existing data to prevent conflicts...');
+    
+    try {
+        // Remove any devices with null MAC addresses or duplicate entries
+        const devicesWithNullMac = await Device.deleteMany({ macAddress: null });
+        if (devicesWithNullMac.deletedCount > 0) {
+            console.log(`Removed ${devicesWithNullMac.deletedCount} devices with null MAC addresses`);
+        }
+        
+        // Remove any duplicate devices by MAC address
+        const deviceDuplicates = await Device.aggregate([
+            { $group: { _id: "$macAddress", count: { $sum: 1 }, docs: { $push: "$_id" } } },
+            { $match: { count: { $gt: 1 } } }
+        ]);
+        
+        for (const duplicate of deviceDuplicates) {
+            // Keep the first document, remove the rest
+            const docsToRemove = duplicate.docs.slice(1);
+            await Device.deleteMany({ _id: { $in: docsToRemove } });
+            console.log(`Removed ${docsToRemove.length} duplicate devices for MAC: ${duplicate._id}`);
+        }
+        
+        // Clean up orphaned test data if exists
+        await Device.deleteMany({ uuid: { $regex: /^device-\d+-uuid$/ } });
+        await App.deleteMany({ name: { $in: ['Netflix', 'YouTube', 'Hotel Services'] } });
+        await Background.deleteMany({ name: { $in: ['Nature Landscape', 'Ocean Waves'] } });
+        await BackgroundBundle.deleteMany({ name: 'Nature Collection' });
+        
+        console.log('Existing data cleanup completed');
+    } catch (error) {
+        console.warn('Warning during cleanup:', error.message);
+        // Continue with initialization even if cleanup fails
+    }
+}
+
+async function createOrUpdateSuperAdmin() {
+    console.log('Creating/updating super admin user...');
+    
+    try {
+        // Check if super admin already exists
+        const existingAdmin = await User.findOne({ email: process.env.SUPER_ADMIN_EMAIL });
+        
+        if (existingAdmin) {
+            console.log('Super admin already exists, updating password...');
+            existingAdmin.password = process.env.SUPER_ADMIN_PASSWORD;
+            await existingAdmin.save();
+            return existingAdmin;
+        } else {
+            const superAdmin = await User.createUser({
+                email: process.env.SUPER_ADMIN_EMAIL,
+                password: process.env.SUPER_ADMIN_PASSWORD,
+                name: 'Super Administrator',
+                role: 'super_admin'
+            });
+            console.log('Super admin created successfully:', superAdmin.email);
+            return superAdmin;
+        }
+    } catch (error) {
+        // If user creation fails due to duplicate email, try to find existing user
+        if (error.code === 11000) {
+            console.log('Super admin email already exists, fetching existing user...');
+            return await User.findOne({ email: process.env.SUPER_ADMIN_EMAIL });
+        }
+        throw error;
+    }
 }
 
 async function initialize() {
@@ -161,30 +269,50 @@ async function initialize() {
         console.log('Connecting to MongoDB database...');
         await database.connect();
         
+        // Clean up any problematic existing data first
+        await cleanupExistingData();
+        
         console.log('Initializing default settings...');
         await Settings.initializeDefaultSettings();
         
-        console.log('Creating super admin user...');
-        const superAdmin = await User.createUser({
-            email: process.env.SUPER_ADMIN_EMAIL,
-            password: process.env.SUPER_ADMIN_PASSWORD,
-            name: 'Super Administrator',
-            role: 'super_admin'
-        });
-        console.log('Super admin created successfully:', superAdmin.email);
+        // Create or update super admin user
+        const superAdmin = await createOrUpdateSuperAdmin();
 
-        // Create test data
-        const apps = await createTestApps(superAdmin);
-        console.log('Created test apps:', apps.length);
+        // Create test data only if it doesn't exist
+        console.log('Creating test data...');
+        
+        let apps = await App.find({ name: { $in: ['Netflix', 'YouTube', 'Hotel Services'] } });
+        if (apps.length === 0) {
+            apps = await createTestApps(superAdmin);
+            console.log('Created test apps:', apps.length);
+        } else {
+            console.log('Test apps already exist, skipping creation');
+        }
 
-        const backgrounds = await createTestBackgrounds(superAdmin);
-        console.log('Created test backgrounds:', backgrounds.length);
+        let backgrounds = await Background.find({ name: { $in: ['Nature Landscape', 'Ocean Waves'] } });
+        if (backgrounds.length === 0) {
+            backgrounds = await createTestBackgrounds(superAdmin);
+            console.log('Created test backgrounds:', backgrounds.length);
+        } else {
+            console.log('Test backgrounds already exist, skipping creation');
+        }
 
-        const bundle = await createTestBackgroundBundle(superAdmin, backgrounds);
-        console.log('Created test background bundle:', bundle.name);
+        let bundle = await BackgroundBundle.findOne({ name: 'Nature Collection' });
+        if (!bundle) {
+            bundle = await createTestBackgroundBundle(superAdmin, backgrounds);
+            console.log('Created test background bundle:', bundle.name);
+        } else {
+            console.log('Test background bundle already exists, skipping creation');
+        }
 
-        const devices = await createTestDevices(superAdmin, apps);
-        console.log('Created test devices:', devices.length);
+        // Only create test devices if none exist with the test UUIDs
+        const existingTestDevices = await Device.find({ uuid: { $regex: /^device-\d+-uuid$/ } });
+        if (existingTestDevices.length === 0) {
+            const devices = await createTestDevices(superAdmin, apps);
+            console.log('Created test devices:', devices.length);
+        } else {
+            console.log('Test devices already exist, skipping creation');
+        }
 
         console.log('MongoDB initialization completed successfully!');
         await database.disconnect();
@@ -192,6 +320,14 @@ async function initialize() {
     } catch (error) {
         console.error('Initialization failed:', error);
         console.error('Error details:', error.message);
+        
+        // Provide helpful error messages for common issues
+        if (error.message.includes('E11000')) {
+            console.error('\nTroubleshooting: This appears to be a duplicate key error.');
+            console.error('Try running the cleanup script first: ./cleanup.sh');
+            console.error('Then run the deployment again: ./deploy.sh');
+        }
+        
         await database.disconnect();
         process.exit(1);
     }
