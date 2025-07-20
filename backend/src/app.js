@@ -4,7 +4,24 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
-require('dotenv').config();
+const path = require('path');
+
+// Configure environment variables with explicit path
+require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+// Validate required environment variables
+const requiredEnvVars = ['JWT_SECRET', 'JWT_REFRESH_SECRET', 'MONGO_URI'];
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    console.error(`❌ Missing required environment variable: ${envVar}`);
+    console.error(`Current working directory: ${process.cwd()}`);
+    console.error(`Looking for .env file at: ${path.join(__dirname, '..', '.env')}`);
+    process.exit(1);
+  }
+}
+
+console.log(`✅ Environment variables loaded successfully`);
+console.log(`✅ JWT_SECRET length: ${process.env.JWT_SECRET.length} characters`);
 
 const database = require('./config/database');
 const logger = require('./utils/logger');
@@ -39,6 +56,9 @@ const io = new Server(server, {
     credentials: true
   }
 });
+
+// Trust proxy for rate limiting when behind Nginx
+app.set('trust proxy', true);
 
 // Middleware
 app.use(helmet({
