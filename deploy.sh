@@ -641,9 +641,6 @@ initialize_database() {
     # Wait for application to start
     sleep 10
     
-    # Copy initialization script
-    cp initialize.js .
-    
     # Run initialization
     node initialize.js
     
