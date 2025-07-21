@@ -22,20 +22,25 @@ export const SocketProvider = ({ children }) => {
         console.warn('No auth token available for socket connection');
         return;
       }
+
+      // Ensure we're connecting to the WebSocket port
+      const wsUrl = socketUrl.includes(':3000') ? socketUrl.replace(':3000', ':4000') : socketUrl;
       
-      const socketInstance = io(socketUrl, {
+      const socketInstance = io(wsUrl, {
         auth: {
           token: token
         },
         extraHeaders: {
           'Authorization': `Bearer ${token}`
         },
-        transports: ['websocket', 'polling'],
+        transports: ['websocket'],
         forceNew: true,
         reconnection: true,
-        timeout: 20000,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000
+        timeout: 10000,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        randomizationFactor: 0.5
       });
 
       // Connection events

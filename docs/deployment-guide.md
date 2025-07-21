@@ -137,6 +137,7 @@ sudo ufw allow ssh
 sudo ufw allow 80/tcp    # HTTP
 sudo ufw allow 443/tcp   # HTTPS
 sudo ufw allow 3000/tcp  # Application port
+sudo ufw allow 4000/tcp  # WebSocket port
 
 # Check firewall status
 sudo ufw status
@@ -288,9 +289,9 @@ server {
         proxy_cache_bypass $http_upgrade;
     }
     
-    # WebSocket for Socket.IO (FIXED: Same port as backend)
+    # WebSocket for Socket.IO on port 4000
     location /socket.io/ {
-        proxy_pass http://localhost:3000;
+        proxy_pass http://localhost:4000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -298,6 +299,9 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 60s;
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
     }
     
     # Health check

@@ -516,7 +516,10 @@ const DevicesPage = () => {
       {/* Devices Data Grid */}
       <Card>
         <DataGrid
-          rows={getFilteredDevices()}
+          rows={getFilteredDevices().map(device => ({
+            ...device,
+            id: device._id || device.id
+          }))}
           columns={columns}
           pageSize={10}
           rowsPerPageOptions={[10, 25, 50]}

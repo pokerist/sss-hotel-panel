@@ -6,6 +6,7 @@ const Settings = require('../models/Settings');
 const User = require('../models/User');
 const { authenticateToken, requireSuperAdmin, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { transformDoc, transformDocs } = require('../utils/mongoTransform');
 
 const router = express.Router();
 
@@ -764,7 +765,7 @@ router.get('/users', [
 ], async (req, res) => {
     try {
         const users = await User.find({}, '-password -refreshTokens');
-        res.json(users);
+        res.json(transformDocs(users));
 
   } catch (error) {
     logger.error('Error fetching users:', error);
@@ -833,7 +834,7 @@ router.post('/users', [
       success: true,
       message: 'User created successfully',
       data: {
-        user: newUser.toJSON()
+        user: transformDoc(newUser)
       }
     });
 
@@ -962,7 +963,7 @@ router.put('/users/:id', [
       success: true,
       message: 'User updated successfully',
       data: {
-        user: userToUpdate.toJSON()
+        user: transformDoc(userToUpdate)
       }
     });
 

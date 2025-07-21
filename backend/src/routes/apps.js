@@ -4,6 +4,7 @@ const path = require('path');
 const { body, query, validationResult } = require('express-validator');
 const { authenticateToken, requireAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { transformDoc, transformDocs } = require('../utils/mongoTransform');
 const App = require('../models/App');
 
 const router = express.Router();
@@ -75,7 +76,7 @@ router.get('/', [
             const apps = await App.find(query)
                 .populate('createdBy', 'name email')
                 .sort({ createdAt: -1 });
-            return res.json(apps);
+            return res.json(transformDocs(apps));
         }
 
         // Get paginated results
@@ -91,7 +92,7 @@ router.get('/', [
         res.json({
             success: true,
             data: {
-                apps,
+                apps: transformDocs(apps),
                 pagination: {
                     page: parseInt(page),
                     limit: parseInt(limit),
@@ -178,7 +179,7 @@ router.post('/', [
     res.status(201).json({
       success: true,
       message: 'App created successfully',
-      data: { app }
+      data: { app: transformDoc(app) }
     });
 
   } catch (error) {

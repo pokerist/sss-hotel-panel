@@ -3,6 +3,7 @@ const { body, query, validationResult } = require('express-validator');
 const Device = require('../models/Device');
 const { authenticateToken, requireAdmin, requireSuperAdmin, logActivity } = require('../middleware/auth');
 const logger = require('../utils/logger');
+const { transformDoc, transformDocs } = require('../utils/mongoTransform');
 
 const router = express.Router();
 
@@ -54,7 +55,7 @@ router.get('/', [
             const devices = await Device.find(query)
                 .populate('approvedBy', 'name email')
                 .sort({ createdAt: -1 });
-            return res.json(devices);
+            return res.json(transformDocs(devices));
         }
 
         // Get paginated results
@@ -70,7 +71,7 @@ router.get('/', [
         res.json({
             success: true,
             data: {
-                devices,
+                devices: transformDocs(devices),
                 pagination: {
                     page: parseInt(page),
                     limit: parseInt(limit),
@@ -202,7 +203,7 @@ router.get('/:deviceId', [
 
     res.json({
       success: true,
-      data: { device }
+      data: { device: transformDoc(device) }
     });
 
   } catch (error) {

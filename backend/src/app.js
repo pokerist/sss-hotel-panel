@@ -189,25 +189,70 @@ async function initializeServices() {
 const PORT = process.env.PORT || 3000;
 const WS_PORT = process.env.WS_PORT || 4000;
 
-// Start main HTTP server
+// Start WebSocket server on its own port
+const wsServer = createServer();
+const wsIo = new Server(wsServer, {
+  cors: {
+    origin: process.env.CORS_ORIGIN || "http://localhost:3001",
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ['websocket'],
+  allowEIO3: true
+});
+
+// Use the same socket handlers
+wsIo.use(authenticateSocket);
+wsIo.on('connection', (socket) => {
+  logger.info(`Client connected: ${socket.id}`, { 
+    userId: socket.user?.id,
+    userRole: socket.user?.role 
+  });
+
+  socket.on('disconnect', () => {
+    logger.info(`Client disconnected: ${socket.id}`);
+  });
+
+  // Device-specific events
+  socket.on('device:heartbeat', (data) => {
+    DeviceManager.handleHeartbeat(socket, data);
+  });
+
+  socket.on('device:register', (data) => {
+    DeviceManager.handleRegistration(socket, data);
+  });
+
+  socket.on('admin:join-room', (room) => {
+    if (socket.user?.role === 'admin' || socket.user?.role === 'super_admin') {
+      socket.join(`admin:${room}`);
+    }
+  });
+});
+
+// Global Socket.IO instance for other modules
+global.io = wsIo;
+
+// Start HTTP server
 server.listen(PORT, async () => {
   logger.info(`IPTV Hotel Panel Backend started on port ${PORT}`);
-  logger.info(`WebSocket server running on same port: ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   
   await initializeServices();
 });
 
-// In production, WebSocket runs on the same port as HTTP (handled by Nginx)
-if (process.env.NODE_ENV !== 'production') {
-  logger.info(`Development mode: WebSocket available on port ${PORT}`);
-}
+// Start WebSocket server
+wsServer.listen(WS_PORT, () => {
+  logger.info(`WebSocket server running on port ${WS_PORT}`);
+});
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   logger.info('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    logger.info('Server closed');
+  Promise.all([
+    new Promise(resolve => server.close(resolve)),
+    new Promise(resolve => wsServer.close(resolve))
+  ]).then(() => {
+    logger.info('All servers closed');
     database.disconnect();
     process.exit(0);
   });
@@ -215,8 +260,11 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   logger.info('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    logger.info('Server closed');
+  Promise.all([
+    new Promise(resolve => server.close(resolve)),
+    new Promise(resolve => wsServer.close(resolve))
+  ]).then(() => {
+    logger.info('All servers closed');
     database.disconnect();
     process.exit(0);
   });
